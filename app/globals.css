@@ -56,11 +56,6 @@ button, input, select { font: inherit; }
 
 .studio-shell { display: grid; grid-template-columns: 318px 1fr; height: 100dvh; min-width: 780px; background: #e9e9e5; }
 .inspector { display: flex; min-height: 0; flex-direction: column; border-right: 1px solid #d3d4ce; background: #f8f8f5; }
-.brand-row { display: flex; align-items: center; gap: 11px; height: 68px; padding: 0 20px; border-bottom: 1px solid #dedfd9; }
-.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; color: #181916; background: #e7ff50; }
-.brand-row div { display: grid; line-height: 1.05; }
-.brand-row strong { font-size: 14px; letter-spacing: -0.02em; }
-.brand-row div span { margin-top: 4px; color: #777971; font-size: 12px; }
 .panel-scroll { flex: 1; overflow-y: auto; padding: 0 20px 24px; }
 .control-section { padding: 22px 0 24px; border-bottom: 1px solid #dedfd9; }
 .section-heading { display: flex; align-items: baseline; gap: 9px; margin-bottom: 18px; }
@@ -95,7 +90,7 @@ button, input, select { font: inherit; }
 .export-progress b { font-family: var(--font-geist-mono); font-size: 11px; }
 .export-progress [data-slot=progress] { grid-column: 1 / -1; }
 
-.workspace { display: grid; min-width: 0; grid-template-rows: 52px 1fr 38px; background: #242522; }
+.workspace { display: grid; min-width: 0; grid-template-rows: 1fr 38px; background: #242522; }
 .workspace-bar { display: flex; align-items: center; gap: 7px; padding: 0 18px; border-bottom: 1px solid #363733; color: #f3f3ef; font-size: 12px; }
 .workspace-bar small { color: #8e9187; }
 .saved-dot { width: 5px; height: 5px; margin-left: 8px; border-radius: 999px; background: #e7ff50; }
@@ -118,6 +113,7 @@ button, input, select { font: inherit; }
 .position-preview { position: absolute; z-index: 3; border: 2px dashed #bbd500; background: rgb(231 255 80 / 18%); pointer-events: none; }
 .position-preview.invalid { border-color: #ff605c; background: rgb(255 73 68 / 22%); }
 .status-bar { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-top: 1px solid #363733; color: #898c83; font-family: var(--font-geist-mono); font-size: 10px; }
+.footer-message { color: #e7ff50; }
 .status-tip { margin-left: auto; }
 
 @media (max-height: 700px) { .control-section { padding-top: 16px; padding-bottom: 17px; } }

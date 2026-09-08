@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Download, ImagePlus, Plus, Ratio, Sparkles, Trash2 } from 'lucide-react';
+import { Download, ImagePlus, Ratio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -10,7 +10,7 @@ import { Slider } from '@/components/ui/slider';
 import { BoxContent } from './box-content';
 import { createMp4 } from './export-mp4';
 import {
-  createBox, firstAvailable, formatNumber, gcd, gridMetrics, initialBox, initialProject, isRectValid,
+  createBox, formatNumber, gcd, gridMetrics, initialBox, initialProject, isRectValid, presetLayout,
   MAX_ZOOM, MIN_ZOOM, sketchParameters, GRID_ROWS, boxStyle,
   type BentoBox, type ContentType, type FitMode, type GridRect, type Interaction, type MediaElement, type Preview, type Project,
 } from './model';
@@ -83,33 +83,17 @@ export function BentoStudio() {
     window.setTimeout(() => setMessage((current) => current === text ? 'Klaar' : current), 2600);
   }, []);
 
-  const addBox = useCallback((contentType: ContentType = 'sketch') => {
+  const applyPreset = useCallback((count: number) => {
     const current = boxesRef.current;
-    const rect = firstAvailable(current, gridMetrics(projectRef.current).columns);
-    if (!rect) { announce('Geen vrije rasterruimte meer'); return null; }
-    const next = createBox(rect, contentType);
-    setBoxes([...current, next]);
-    setSelectedId(next.id);
-    announce('Bento-box toegevoegd');
-    return next;
-  }, [announce]);
-
-  const removeBox = useCallback((id: string) => {
-    const target = boxesRef.current.find((box) => box.id === id);
-    if (target?.objectUrl) URL.revokeObjectURL(target.objectUrl);
-    const remaining = boxesRef.current.filter((box) => box.id !== id);
-    setBoxes(remaining);
-    setSelectedId(remaining[0]?.id ?? null);
-    announce('Bento-box verwijderd');
-  }, [announce]);
-
-  const duplicateBox = useCallback((box: BentoBox) => {
-    const rect = firstAvailable(boxesRef.current, gridMetrics(projectRef.current).columns, box.w, box.h);
-    if (!rect) { announce('Geen ruimte voor een duplicaat'); return; }
-    const duplicate = { ...box, ...rect, id: crypto.randomUUID(), sketchParameters: { ...box.sketchParameters } };
-    setBoxes((current) => [...current, duplicate]);
-    setSelectedId(duplicate.id);
-    announce('Bento-box gedupliceerd');
+    const rects = presetLayout(count, gridMetrics(projectRef.current).columns);
+    current.slice(rects.length).forEach((box) => { if (box.objectUrl) URL.revokeObjectURL(box.objectUrl); });
+    const next = rects.map((rect, index) => {
+      const existing = current[index];
+      return existing ? { ...existing, ...rect } : createBox(rect);
+    });
+    setBoxes(next);
+    setSelectedId(next[0]?.id ?? null);
+    announce(`Layout met ${count} ${count === 1 ? 'Bento' : "Bento's"} toegepast`);
   }, [announce]);
 
   const patchBox = useCallback((id: string, patch: Partial<BentoBox>, validateGrid = false) => {
@@ -132,12 +116,9 @@ export function BentoStudio() {
   const changeProjectDimension = (key: 'width' | 'height', value: number) => {
     if (!Number.isFinite(value) || value < 320 || value > 7680) return;
     const next = { ...project, [key]: Math.round(value) };
-    const nextColumns = gridMetrics(next).columns;
-    if (!boxes.every((box) => isRectValid(box, boxes, nextColumns, box.id))) {
-      announce('Projectformaat is te klein voor de huidige indeling');
-      return;
-    }
+    const rects = presetLayout(boxes.length, gridMetrics(next).columns);
     setProject(next);
+    setBoxes((current) => current.map((box, index) => ({ ...box, ...rects[index] })));
   };
 
   const pointerDown = (event: React.PointerEvent, box: BentoBox, handle?: Interaction['handle']) => {
@@ -180,17 +161,6 @@ export function BentoStudio() {
     if (!wasValid) announce('Ongeldige plaatsing geweigerd');
   };
 
-  useEffect(() => {
-    const keyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement;
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId && !['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && !target.isContentEditable) {
-        event.preventDefault(); removeBox(selectedId);
-      }
-    };
-    window.addEventListener('keydown', keyDown);
-    return () => window.removeEventListener('keydown', keyDown);
-  }, [removeBox, selectedId]);
-
   const selectFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!selected) return;
     const file = event.target.files?.[0];
@@ -214,7 +184,7 @@ export function BentoStudio() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `${snapshot.name.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'bento-composition'}.mp4`;
+      anchor.download = 'noordzuid-bento.mp4';
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setMessage('MP4 gedownload');
@@ -230,22 +200,20 @@ export function BentoStudio() {
     const lifecycle = new AbortController();
     try {
       void Promise.resolve(context.registerTool({
-        name: 'add_bento_box', title: 'Bento-box toevoegen',
-        description: 'Voeg een nieuw vrij geplaatst Bento-vak toe aan de zichtbare compositie.',
-        inputSchema: { type: 'object', properties: { contentType: { type: 'string', enum: ['sketch', 'image', 'video'] } }, additionalProperties: false },
+        name: 'set_bento_layout', title: 'Bento-layout kiezen',
+        description: 'Kies de vaste layout voor één tot en met zes Bento-vakken.',
+        inputSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 1, maximum: 6 } }, required: ['count'], additionalProperties: false },
         annotations: { readOnlyHint: false, untrustedContentHint: false },
         execute(input) {
-          const value = input as { contentType?: string };
-          const type = value?.contentType ?? 'sketch';
-          if (!['sketch', 'image', 'video'].includes(type)) throw new Error('Ongeldig inhoudstype');
-          const box = addBox(type as ContentType);
-          if (!box) throw new Error('Geen vrije rasterruimte');
-          return { id: box.id, contentType: box.contentType, position: { x: box.x, y: box.y }, size: { width: box.w, height: box.h } };
+          const value = input as { count?: number };
+          if (!Number.isInteger(value?.count) || value.count! < 1 || value.count! > 6) throw new Error('Aantal moet tussen 1 en 6 liggen');
+          applyPreset(value.count!);
+          return { count: value.count, layout: 'preset' };
         },
       }, { signal: lifecycle.signal })).catch(() => undefined);
     } catch { /* Optional in browsers without WebMCP support. */ }
     return () => lifecycle.abort();
-  }, [addBox]);
+  }, [applyPreset]);
 
   const aspectDivisor = gcd(project.width, project.height);
   const aspect = `${project.width / aspectDivisor}:${project.height / aspectDivisor}`;
@@ -253,16 +221,14 @@ export function BentoStudio() {
   return (
     <main className="studio-shell" onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}>
       <aside className="inspector" onPointerDown={(event) => event.stopPropagation()}>
-        <div className="brand-row"><span className="brand-mark"><Sparkles size={15} strokeWidth={2.4} /></span><div><strong>Noordzuid</strong><span>Bento Studio</span></div></div>
         <div className="panel-scroll">
           <section className="control-section">
             <div className="section-heading"><span>01</span><h2>Project</h2></div>
-            <label className="field-label" htmlFor="project-name">Projectnaam<Input id="project-name" value={project.name} onChange={(event) => setProject({ ...project, name: event.target.value })} /></label>
+            <div className="field-label"><span>Aantal Bento’s</span><Select value={String(boxes.length)} onValueChange={(value) => applyPreset(Number(value))}><SelectTrigger className="panel-select" aria-label="Aantal Bento’s"><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 4, 5, 6].map((count) => <SelectItem key={count} value={String(count)}>{count} {count === 1 ? 'Bento' : 'Bento’s'}</SelectItem>)}</SelectContent></Select></div>
             <div className="field-grid"><NumberField label="Breedte" value={project.width} min={320} onChange={(value) => changeProjectDimension('width', value)} /><NumberField label="Hoogte" value={project.height} min={320} onChange={(value) => changeProjectDimension('height', value)} /></div>
             <label className="field-label color-field">Canvasachtergrond<input type="color" value={project.background} onChange={(event) => setProject({ ...project, background: event.target.value })} /></label>
             <div className="field-grid"><NumberField label="Framerate" value={project.fps} min={1} onChange={(value) => setProject({ ...project, fps: Math.min(60, Math.max(1, Math.round(value))) })} /><NumberField label="Duur (sec)" value={project.duration} min={1} onChange={(value) => setProject({ ...project, duration: Math.min(60, Math.max(1, value)) })} /></div>
             <div className="summary-row"><Ratio size={14} /><span>{aspect}</span><span>{columns} × {GRID_ROWS} raster</span></div>
-            <Button className="add-button" variant="outline" onClick={() => addBox()}><Plus size={15} /> Bento-box toevoegen</Button>
           </section>
 
           <section className={`control-section ${!selected ? 'disabled-section' : ''}`}>
@@ -271,11 +237,11 @@ export function BentoStudio() {
               <div className="field-label"><span>Inhoudstype</span><Select value={selected.contentType} onValueChange={(value) => changeContentType(selected, value as ContentType)}><SelectTrigger className="panel-select" aria-label="Inhoudstype"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="sketch">p5.js Sketch</SelectItem><SelectItem value="image">Afbeelding</SelectItem><SelectItem value="video">Video</SelectItem></SelectContent></Select></div>
               <div className="field-grid four"><NumberField label="X" value={selected.x} onChange={(value) => patchGridValue('x', value)} /><NumberField label="Y" value={selected.y} onChange={(value) => patchGridValue('y', value)} /><NumberField label="B" value={selected.w} min={1} onChange={(value) => patchGridValue('w', value)} /><NumberField label="H" value={selected.h} min={1} onChange={(value) => patchGridValue('h', value)} /></div>
               <ControlSlider label="Hoekafronding" value={selected.radius} min={0} max={160} suffix="px" onChange={(value) => patchBox(selected.id, { radius: value })} />
+              <label className="field-label color-field">Achtergrond<input type="color" value={selected.background} onChange={(event) => patchBox(selected.id, { background: event.target.value })} /></label>
               <ControlSlider label="Inhoudszoom" value={selected.zoom} min={MIN_ZOOM} max={MAX_ZOOM} step={0.05} suffix="×" onChange={(value) => patchBox(selected.id, { zoom: value })} />
               <ControlSlider label="Horizontaal" value={selected.positionX} min={-100} max={100} suffix="%" onChange={(value) => patchBox(selected.id, { positionX: value })} />
               <ControlSlider label="Verticaal" value={selected.positionY} min={-100} max={100} suffix="%" onChange={(value) => patchBox(selected.id, { positionY: value })} />
               {selected.contentType !== 'sketch' && <><div className="field-label"><span>Weergave</span><Select value={selected.fit} onValueChange={(value) => patchBox(selected.id, { fit: value as FitMode })}><SelectTrigger className="panel-select" aria-label="Weergave"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cover">Cover</SelectItem><SelectItem value="contain">Contain</SelectItem></SelectContent></Select></div><label className="file-picker" htmlFor={`media-${selected.id}`}><ImagePlus size={15} /><span>{selected.fileName ?? 'Kies lokaal bestand'}</span><input id={`media-${selected.id}`} type="file" accept={selected.contentType === 'image' ? 'image/*' : 'video/*'} onChange={selectFile} /></label></>}
-              <div className="button-pair"><Button variant="outline" onClick={() => duplicateBox(selected)}><Copy size={14} /> Dupliceren</Button><Button variant="outline" className="delete-button" onClick={() => removeBox(selected.id)}><Trash2 size={14} /> Verwijderen</Button></div>
             </> : <p className="empty-note">Selecteer een box op het canvas.</p>}
           </section>
 
@@ -292,17 +258,16 @@ export function BentoStudio() {
       </aside>
 
       <section className="workspace">
-        <header className="workspace-bar"><span>{project.name || 'Zonder titel'}</span><span className="saved-dot" /><small aria-live="polite">{message}</small><div className="workspace-meta">{project.width} × {project.height}<b>{Math.round(viewScale * 100)}%</b></div></header>
         <div className="stage-wrap" ref={viewportRef} onPointerDown={() => setSelectedId(null)}>
           <div className="project-stage" aria-label="Projectcanvas" style={{ width: project.width * viewScale, height: project.height * viewScale, background: project.background }} onPointerDown={(event) => { event.stopPropagation(); setSelectedId(null); }}>
             {preview && <div className={`position-preview ${preview.valid ? 'valid' : 'invalid'}`} style={boxStyle(preview, unit, margin, viewScale)} />}
             {boxes.map((box, index) => <div key={box.id} className={`bento-box ${selectedId === box.id ? 'selected' : ''}`} data-type={box.contentType} style={{ ...boxStyle(box, unit, margin, viewScale), borderRadius: box.radius * viewScale }} onPointerDown={(event) => pointerDown(event, box)} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(box.id); patchBox(box.id, { zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, box.zoom + (event.deltaY < 0 ? 0.1 : -0.1))) }); }}>
-              <div className="content-clip" style={{ borderRadius: box.radius * viewScale }}><BoxContent box={box} mediaRef={mediaRef} /></div>
+              <div className="content-clip" style={{ borderRadius: box.radius * viewScale, background: box.background }}><BoxContent box={box} mediaRef={mediaRef} /></div>
               {selectedId === box.id && <><span className="box-label">{box.contentType.toUpperCase()} {String(index + 1).padStart(2, '0')}</span>{(['nw', 'ne', 'sw', 'se'] as const).map((handle) => <button type="button" aria-label={`Formaat wijzigen ${handle}`} key={handle} className={`handle ${handle}`} onPointerDown={(event) => pointerDown(event, box, handle)} />)}</>}
             </div>)}
           </div>
         </div>
-        <footer className="status-bar"><span>Raster {formatNumber(unit)} px</span><span>Marge {formatNumber(margin)} px</span><span>{boxes.length} {boxes.length === 1 ? 'box' : 'boxes'}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
+        <footer className="status-bar"><span aria-live="polite" className="footer-message">{message}</span><span>{project.width} × {project.height}</span><span>{Math.round(viewScale * 100)}%</span><span>Raster {formatNumber(unit)} px</span><span>Marge {formatNumber(margin)} px</span><span>{boxes.length} {boxes.length === 1 ? 'Bento' : "Bento's"}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
       </section>
     </main>
   );

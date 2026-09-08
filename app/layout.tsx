@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Noordzuid Bento Studio',
+  title: 'Noordzuid Designtool',
   description: 'Combineer sketches, beelden en video in een grid-based Bento-compositie.',
 };
 

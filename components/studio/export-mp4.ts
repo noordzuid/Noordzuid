@@ -21,7 +21,7 @@ function drawComposition(ctx: CanvasRenderingContext2D, project: Project, boxes:
       ctx.fillStyle = box.sketchParameters.backgroundColor;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
     } else {
-      ctx.fillStyle = '#ecece7';
+      ctx.fillStyle = box.background;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       const element = media.get(box.id);
       if (element) {

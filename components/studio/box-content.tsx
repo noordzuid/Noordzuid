@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import type p5 from 'p5';
 import { FileImage, Film } from 'lucide-react';
 import type { BentoBox, MediaElement, SketchValues } from './model';
+import { blankSketch, redrawBlankSketch } from '@/sketches/blank-sketch';
 
 function P5Sketch({ values }: { values: SketchValues }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -20,23 +21,13 @@ function P5Sketch({ values }: { values: SketchValues }) {
     let resizeObserver: ResizeObserver | undefined;
     void import('p5').then(({ default: P5 }) => {
       if (!mounted || !hostRef.current) return;
-      const sketch = (p: p5) => {
-        p.setup = () => {
-          const host = hostRef.current!;
-          const canvas = p.createCanvas(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
-          canvas.attribute('aria-hidden', 'true');
-          p.pixelDensity(1);
-          p.noLoop();
-          p.background(valuesRef.current.backgroundColor);
-          resizeObserver = new ResizeObserver(() => {
-            if (!hostRef.current) return;
-            p.resizeCanvas(Math.max(1, hostRef.current.clientWidth), Math.max(1, hostRef.current.clientHeight));
-            p.background(valuesRef.current.backgroundColor);
-          });
-          resizeObserver.observe(host);
-        };
-      };
-      instanceRef.current = new P5(sketch, hostRef.current);
+      const host = hostRef.current;
+      const sketch = (p: p5) => blankSketch(p, host, () => valuesRef.current);
+      instanceRef.current = new P5(sketch, host);
+      resizeObserver = new ResizeObserver(() => {
+        if (instanceRef.current && hostRef.current) redrawBlankSketch(instanceRef.current, hostRef.current, valuesRef.current);
+      });
+      resizeObserver.observe(host);
     });
     return () => {
       mounted = false;
