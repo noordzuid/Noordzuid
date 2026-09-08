@@ -6,10 +6,11 @@ import { FileImage, Film } from 'lucide-react';
 import type { BentoBox, MediaElement, SketchValues } from './model';
 import { sketch as blankSketch, redrawSketch as redrawBlankSketch } from '@/sketches/blank-sketch';
 
-function P5Sketch({ values }: { values: SketchValues }) {
+function P5Sketch({ values, onCanvas }: { values: SketchValues; onCanvas: (element: HTMLCanvasElement | null) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<p5 | null>(null);
   const valuesRef = useRef(values);
+  const onCanvasRef = useRef(onCanvas);
 
   useEffect(() => {
     valuesRef.current = values;
@@ -17,12 +18,16 @@ function P5Sketch({ values }: { values: SketchValues }) {
   }, [values]);
 
   useEffect(() => {
+    onCanvasRef.current = onCanvas;
+  }, [onCanvas]);
+
+  useEffect(() => {
     let mounted = true;
     let resizeObserver: ResizeObserver | undefined;
     void import('p5').then(({ default: P5 }) => {
       if (!mounted || !hostRef.current) return;
       const host = hostRef.current;
-      const sketch = (p: p5) => blankSketch(p, host, () => valuesRef.current);
+      const sketch = (p: p5) => blankSketch(p, host, () => valuesRef.current, (element) => onCanvasRef.current(element));
       instanceRef.current = new P5(sketch, host);
       resizeObserver = new ResizeObserver(() => {
         if (instanceRef.current && hostRef.current) redrawBlankSketch(instanceRef.current, hostRef.current, valuesRef.current);
@@ -32,6 +37,7 @@ function P5Sketch({ values }: { values: SketchValues }) {
     return () => {
       mounted = false;
       resizeObserver?.disconnect();
+      onCanvasRef.current(null);
       instanceRef.current?.remove();
       instanceRef.current = null;
     };
@@ -56,5 +62,5 @@ export function BoxContent({ box, mediaRef }: { box: BentoBox; mediaRef: (id: st
   if (box.contentType !== 'sketch') {
     return <div className="media-empty">{box.contentType === 'image' ? <FileImage /> : <Film />}<span>Kies een bestand</span></div>;
   }
-  return <div className="sketch-content" style={{ transform: `translate(${box.positionX / 2}%, ${box.positionY / 2}%) scale(${box.zoom})` }}><P5Sketch values={box.sketchParameters} /></div>;
+  return <div className="sketch-content" style={{ transform: `translate(${box.positionX / 2}%, ${box.positionY / 2}%) scale(${box.zoom})` }}><P5Sketch values={box.sketchParameters} onCanvas={(element) => mediaRef(box.id, element)} /></div>;
 }

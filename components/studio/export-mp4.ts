@@ -8,6 +8,12 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.roundRect(x, y, w, h, r);
 }
 
+function sourceSize(element: MediaElement) {
+  if (element instanceof HTMLVideoElement) return { width: element.videoWidth, height: element.videoHeight };
+  if (element instanceof HTMLImageElement) return { width: element.naturalWidth, height: element.naturalHeight };
+  return { width: element.width, height: element.height };
+}
+
 function drawComposition(ctx: CanvasRenderingContext2D, project: Project, boxes: BentoBox[], media: Map<string, MediaElement>) {
   const metrics = gridMetrics(project);
   ctx.fillStyle = project.background;
@@ -17,24 +23,18 @@ function drawComposition(ctx: CanvasRenderingContext2D, project: Project, boxes:
     ctx.save();
     roundedRect(ctx, rect.x, rect.y, rect.width, rect.height, box.radius);
     ctx.clip();
-    if (box.contentType === 'sketch') {
-      ctx.fillStyle = box.sketchParameters.backgroundColor;
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-    } else {
-      ctx.fillStyle = box.background;
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      const element = media.get(box.id);
-      if (element) {
-        const sourceW = element instanceof HTMLVideoElement ? element.videoWidth : element.naturalWidth;
-        const sourceH = element instanceof HTMLVideoElement ? element.videoHeight : element.naturalHeight;
-        if (sourceW && sourceH) {
-          const base = box.fit === 'cover' ? Math.max(rect.width / sourceW, rect.height / sourceH) : Math.min(rect.width / sourceW, rect.height / sourceH);
-          const width = sourceW * base * box.zoom;
-          const height = sourceH * base * box.zoom;
-          const x = rect.x + (rect.width - width) / 2 + (box.positionX / 100) * rect.width / 2;
-          const y = rect.y + (rect.height - height) / 2 + (box.positionY / 100) * rect.height / 2;
-          ctx.drawImage(element, x, y, width, height);
-        }
+    ctx.fillStyle = box.contentType === 'sketch' ? box.sketchParameters.backgroundColor : box.background;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    const element = media.get(box.id);
+    if (element) {
+      const { width: sourceW, height: sourceH } = sourceSize(element);
+      if (sourceW && sourceH) {
+        const base = box.fit === 'cover' ? Math.max(rect.width / sourceW, rect.height / sourceH) : Math.min(rect.width / sourceW, rect.height / sourceH);
+        const width = sourceW * base * box.zoom;
+        const height = sourceH * base * box.zoom;
+        const x = rect.x + (rect.width - width) / 2 + (box.positionX / 100) * rect.width / 2;
+        const y = rect.y + (rect.height - height) / 2 + (box.positionY / 100) * rect.height / 2;
+        ctx.drawImage(element, x, y, width, height);
       }
     }
     ctx.restore();
@@ -43,6 +43,7 @@ function drawComposition(ctx: CanvasRenderingContext2D, project: Project, boxes:
 
 export async function createMp4(project: Project, boxes: BentoBox[], media: Map<string, MediaElement>, onProgress: (value: number) => void) {
   if (!('VideoEncoder' in window) || !('VideoFrame' in window)) throw new Error('Deze browser ondersteunt geen MP4-export via WebCodecs');
+  if (project.width % 2 !== 0 || project.height % 2 !== 0) throw new Error('MP4-export vereist een even breedte en hoogte');
   const videos = [...media.values()].filter((element): element is HTMLVideoElement => element instanceof HTMLVideoElement);
   await Promise.all(videos.map(async (video) => {
     video.pause();
@@ -60,16 +61,29 @@ export async function createMp4(project: Project, boxes: BentoBox[], media: Map<
   const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) throw new Error('Canvas niet beschikbaar');
   const target = new ArrayBufferTarget();
-  const muxer = new Muxer({ target, video: { codec: 'avc', width: project.width, height: project.height }, fastStart: 'in-memory' });
-  const config: VideoEncoderConfig = {
-    codec: 'avc1.42001f', width: project.width, height: project.height,
+  const muxer = new Muxer({ target, video: { codec: 'avc', width: project.width, height: project.height, frameRate: project.fps }, fastStart: 'in-memory' });
+  const baseConfig = {
+    width: project.width, height: project.height,
     bitrate: Math.max(2_000_000, Math.min(16_000_000, project.width * project.height * 4)), framerate: project.fps,
   };
-  const support = await VideoEncoder.isConfigSupported(config);
-  if (!support.supported) throw new Error('Deze resolutie wordt niet ondersteund voor MP4-export');
+  const codecs = ['avc1.42002A', 'avc1.4D002A', 'avc1.64002A', 'avc1.420033', 'avc1.4D0033', 'avc1.640033'];
+  let supportedConfig: VideoEncoderConfig | null = null;
+  for (const codec of codecs) {
+    try {
+      const config: VideoEncoderConfig = { ...baseConfig, codec };
+      const support = await VideoEncoder.isConfigSupported(config);
+      if (support.supported) {
+        supportedConfig = support.config ?? config;
+        break;
+      }
+    } catch {
+      // Try the next broadly supported H.264 profile and level.
+    }
+  }
+  if (!supportedConfig) throw new Error('Deze browser ondersteunt geen geschikte H.264-configuratie voor MP4-export');
   let encoderError: Error | null = null;
   const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (error) => { encoderError = error; } });
-  encoder.configure(support.config ?? config);
+  encoder.configure(supportedConfig);
   const totalFrames = Math.round(project.duration * project.fps);
   const frameDuration = 1_000_000 / project.fps;
   const startedAt = performance.now();

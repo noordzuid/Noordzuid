@@ -36,7 +36,7 @@ export type Interaction = {
   lastValid: GridRect;
 };
 export type Preview = GridRect & { valid: boolean; id: string };
-export type MediaElement = HTMLImageElement | HTMLVideoElement;
+export type MediaElement = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
 
 export const initialProject: Project = {
   width: 1920, height: 1080, background: '#292a27', fps: 30, duration: 10,
@@ -102,10 +102,10 @@ export function gridMetrics(project: Project) {
 export type GridMetrics = ReturnType<typeof gridMetrics>;
 
 export function gridRectToProject(rect: GridRect, metrics: GridMetrics) {
-  const x = rect.x * metrics.unitX + (rect.x === 0 ? 0 : metrics.marginX / 2);
-  const y = rect.y * metrics.unitY + (rect.y === 0 ? 0 : metrics.marginY / 2);
-  const right = (rect.x + rect.w) * metrics.unitX - (rect.x + rect.w === metrics.columns ? 0 : metrics.marginX / 2);
-  const bottom = (rect.y + rect.h) * metrics.unitY - (rect.y + rect.h === metrics.rows ? 0 : metrics.marginY / 2);
+  const x = rect.x * metrics.unitX + metrics.marginX / 2;
+  const y = rect.y * metrics.unitY + metrics.marginY / 2;
+  const right = (rect.x + rect.w) * metrics.unitX - metrics.marginX / 2;
+  const bottom = (rect.y + rect.h) * metrics.unitY - metrics.marginY / 2;
   return { x, y, width: right - x, height: bottom - y };
 }
 

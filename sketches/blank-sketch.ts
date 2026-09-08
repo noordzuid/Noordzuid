@@ -10,22 +10,30 @@ export type sketchValues = {
   speed: number;
 };
 
-export function sketch(p: p5, host: HTMLDivElement, getValues: () => sketchValues) { //setup
+function drawFrame(p: p5, values: sketchValues) {
+  p.background(values.backgroundColor);
+  p.push();
+  p.translate(p.width / 2, p.height / 2);
+  p.rotate(p.frameCount * 0.01 * values.speed);
+  p.noStroke();
+  p.fill(255);
+  p.rectMode(p.CENTER);
+  p.rect(0, 0, 50, 50);
+  p.pop();
+}
+
+export function sketch(p: p5, host: HTMLDivElement, getValues: () => sketchValues, onCanvas?: (element: HTMLCanvasElement) => void) { //setup
   p.setup = () => {
     const canvas = p.createCanvas(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
     canvas.attribute('aria-hidden', 'true');
+    onCanvas?.(canvas.elt as HTMLCanvasElement);
     p.pixelDensity(1);
-    // p.noLoop();
-    p.background(getValues().backgroundColor);
   };
+
+  p.draw = () => drawFrame(p, getValues());
 }
 
 export function redrawSketch(p: p5, host: HTMLDivElement, values: sketchValues) { //draw
   p.resizeCanvas(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
-  p.background(values.backgroundColor);
-
-  p.fill(255);
-  p.translate(p.width/2,p.height/2);
-  p.rotate(p.frameCount * 0.01);
-  p.rect(0,0,50,50);
+  drawFrame(p, values);
 }
