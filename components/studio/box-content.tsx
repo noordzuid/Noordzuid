@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import type p5 from 'p5';
 import { FileImage, Film } from 'lucide-react';
 import type { BentoBox, MediaElement, SketchValues } from './model';
-import { blankSketch, redrawBlankSketch } from '@/sketches/blank-sketch';
+import { sketch as blankSketch, redrawSketch as redrawBlankSketch } from '@/sketches/blank-sketch';
 
 function P5Sketch({ values }: { values: SketchValues }) {
   const hostRef = useRef<HTMLDivElement>(null);

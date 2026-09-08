@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Download, ImagePlus, Ratio } from 'lucide-react';
+import { Download, ImagePlus, Minus, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -10,8 +10,8 @@ import { Slider } from '@/components/ui/slider';
 import { BoxContent } from './box-content';
 import { createMp4 } from './export-mp4';
 import {
-  createBox, formatNumber, gcd, gridMetrics, initialBox, initialProject, isRectValid, presetLayout,
-  MAX_ZOOM, MIN_ZOOM, sketchParameters, GRID_ROWS, boxStyle,
+  createBox, formatNumber, gridMetrics, initialBox, initialProject, isRectValid, presetLayout,
+  MAX_ZOOM, MIN_ZOOM, sketchParameters, boxStyle,
   type BentoBox, type ContentType, type FitMode, type GridRect, type Interaction, type MediaElement, type Preview, type Project,
 } from './model';
 
@@ -54,7 +54,8 @@ export function BentoStudio() {
   const boxesRef = useRef(boxes);
   const projectRef = useRef(project);
   const mediaRefs = useRef(new Map<string, MediaElement>());
-  const { unit, margin, columns } = useMemo(() => gridMetrics(project), [project]);
+  const metrics = useMemo(() => gridMetrics(project), [project]);
+  const { unitX, unitY, marginX, marginY, columns } = metrics;
   const selected = boxes.find((box) => box.id === selectedId) ?? null;
 
   useEffect(() => { boxesRef.current = boxes; }, [boxes]);
@@ -134,8 +135,8 @@ export function BentoStudio() {
   const pointerMove = (event: React.PointerEvent) => {
     const interaction = interactionRef.current;
     if (!interaction) return;
-    const dx = Math.round((event.clientX - interaction.startX) / (unit * viewScale));
-    const dy = Math.round((event.clientY - interaction.startY) / (unit * viewScale));
+    const dx = Math.round((event.clientX - interaction.startX) / (unitX * viewScale));
+    const dy = Math.round((event.clientY - interaction.startY) / (unitY * viewScale));
     const start = interaction.startBox;
     let candidate: GridRect = { ...start };
     if (interaction.mode === 'drag') candidate = { ...start, x: start.x + dx, y: start.y + dy };
@@ -215,20 +216,16 @@ export function BentoStudio() {
     return () => lifecycle.abort();
   }, [applyPreset]);
 
-  const aspectDivisor = gcd(project.width, project.height);
-  const aspect = `${project.width / aspectDivisor}:${project.height / aspectDivisor}`;
-
   return (
     <main className="studio-shell" onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}>
       <aside className="inspector" onPointerDown={(event) => event.stopPropagation()}>
         <div className="panel-scroll">
           <section className="control-section">
             <div className="section-heading"><span>01</span><h2>Project</h2></div>
-            <div className="field-label"><span>Aantal Bento’s</span><Select value={String(boxes.length)} onValueChange={(value) => applyPreset(Number(value))}><SelectTrigger className="panel-select" aria-label="Aantal Bento’s"><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 4, 5, 6].map((count) => <SelectItem key={count} value={String(count)}>{count} {count === 1 ? 'Bento' : 'Bento’s'}</SelectItem>)}</SelectContent></Select></div>
+            <div className="field-label"><span>Aantal Bento’s</span><div className="count-stepper"><Button type="button" variant="outline" aria-label="Minder Bento’s" disabled={boxes.length <= 1} onClick={() => applyPreset(boxes.length - 1)}><Minus /></Button><output aria-live="polite">{boxes.length}</output><Button type="button" variant="outline" aria-label="Meer Bento’s" disabled={boxes.length >= 6} onClick={() => applyPreset(boxes.length + 1)}><Plus /></Button></div></div>
             <div className="field-grid"><NumberField label="Breedte" value={project.width} min={320} onChange={(value) => changeProjectDimension('width', value)} /><NumberField label="Hoogte" value={project.height} min={320} onChange={(value) => changeProjectDimension('height', value)} /></div>
             <label className="field-label color-field">Canvasachtergrond<input type="color" value={project.background} onChange={(event) => setProject({ ...project, background: event.target.value })} /></label>
             <div className="field-grid"><NumberField label="Framerate" value={project.fps} min={1} onChange={(value) => setProject({ ...project, fps: Math.min(60, Math.max(1, Math.round(value))) })} /><NumberField label="Duur (sec)" value={project.duration} min={1} onChange={(value) => setProject({ ...project, duration: Math.min(60, Math.max(1, value)) })} /></div>
-            <div className="summary-row"><Ratio size={14} /><span>{aspect}</span><span>{columns} × {GRID_ROWS} raster</span></div>
           </section>
 
           <section className={`control-section ${!selected ? 'disabled-section' : ''}`}>
@@ -260,14 +257,14 @@ export function BentoStudio() {
       <section className="workspace">
         <div className="stage-wrap" ref={viewportRef} onPointerDown={() => setSelectedId(null)}>
           <div className="project-stage" aria-label="Projectcanvas" style={{ width: project.width * viewScale, height: project.height * viewScale, background: project.background }} onPointerDown={(event) => { event.stopPropagation(); setSelectedId(null); }}>
-            {preview && <div className={`position-preview ${preview.valid ? 'valid' : 'invalid'}`} style={boxStyle(preview, unit, margin, viewScale)} />}
-            {boxes.map((box, index) => <div key={box.id} className={`bento-box ${selectedId === box.id ? 'selected' : ''}`} data-type={box.contentType} style={{ ...boxStyle(box, unit, margin, viewScale), borderRadius: box.radius * viewScale }} onPointerDown={(event) => pointerDown(event, box)} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(box.id); patchBox(box.id, { zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, box.zoom + (event.deltaY < 0 ? 0.1 : -0.1))) }); }}>
+            {preview && <div className={`position-preview ${preview.valid ? 'valid' : 'invalid'}`} style={boxStyle(preview, metrics, viewScale)} />}
+            {boxes.map((box, index) => <div key={box.id} className={`bento-box ${selectedId === box.id ? 'selected' : ''}`} data-type={box.contentType} style={{ ...boxStyle(box, metrics, viewScale), borderRadius: box.radius * viewScale }} onPointerDown={(event) => pointerDown(event, box)} onWheel={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(box.id); patchBox(box.id, { zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, box.zoom + (event.deltaY < 0 ? 0.1 : -0.1))) }); }}>
               <div className="content-clip" style={{ borderRadius: box.radius * viewScale, background: box.background }}><BoxContent box={box} mediaRef={mediaRef} /></div>
               {selectedId === box.id && <><span className="box-label">{box.contentType.toUpperCase()} {String(index + 1).padStart(2, '0')}</span>{(['nw', 'ne', 'sw', 'se'] as const).map((handle) => <button type="button" aria-label={`Formaat wijzigen ${handle}`} key={handle} className={`handle ${handle}`} onPointerDown={(event) => pointerDown(event, box, handle)} />)}</>}
             </div>)}
           </div>
         </div>
-        <footer className="status-bar"><span aria-live="polite" className="footer-message">{message}</span><span>{project.width} × {project.height}</span><span>{Math.round(viewScale * 100)}%</span><span>Raster {formatNumber(unit)} px</span><span>Marge {formatNumber(margin)} px</span><span>{boxes.length} {boxes.length === 1 ? 'Bento' : "Bento's"}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
+        <footer className="status-bar"><span aria-live="polite" className="footer-message">{message}</span><span>{project.width} × {project.height}</span><span>{Math.round(viewScale * 100)}%</span><span>Raster {formatNumber(unitX)} × {formatNumber(unitY)} px</span><span>Marge {formatNumber(marginX)} × {formatNumber(marginY)} px</span><span>{boxes.length} {boxes.length === 1 ? 'Bento' : "Bento's"}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
       </section>
     </main>
   );

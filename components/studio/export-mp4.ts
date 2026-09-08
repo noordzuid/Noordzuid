@@ -13,7 +13,7 @@ function drawComposition(ctx: CanvasRenderingContext2D, project: Project, boxes:
   ctx.fillStyle = project.background;
   ctx.fillRect(0, 0, project.width, project.height);
   for (const box of boxes) {
-    const rect = gridRectToProject(box, metrics.unit, metrics.margin);
+    const rect = gridRectToProject(box, metrics);
     ctx.save();
     roundedRect(ctx, rect.x, rect.y, rect.width, rect.height, box.radius);
     ctx.clip();
