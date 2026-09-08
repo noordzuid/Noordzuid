@@ -27,7 +27,7 @@ export function sketch(p: p5, host: HTMLDivElement, getValues: () => sketchValue
     const canvas = p.createCanvas(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
     canvas.attribute('aria-hidden', 'true');
     onCanvas?.(canvas.elt as HTMLCanvasElement);
-    p.pixelDensity(1);
+    // p.pixelDensity(1);
   };
 
   p.draw = () => drawFrame(p, getValues());
