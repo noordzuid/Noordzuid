@@ -4,7 +4,6 @@ export { sketchParameters };
 
 export const GRID_COLUMNS = 8;
 export const GRID_ROWS = 8;
-export const GRID_MARGIN_RATIO = 0.1;
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 3;
 
@@ -25,7 +24,7 @@ export type BentoBox = GridRect & {
   objectUrl?: string;
   sketchParameters: SketchValues;
 };
-export type Project = { width: number; height: number; background: string; fps: number; duration: number };
+export type Project = { width: number; height: number; margin: number; background: string; fps: number; duration: number };
 export type Interaction = {
   id: string;
   mode: 'drag' | 'resize';
@@ -39,7 +38,7 @@ export type Preview = GridRect & { valid: boolean; id: string };
 export type MediaElement = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
 
 export const initialProject: Project = {
-  width: 1920, height: 1080, background: '#292a27', fps: 30, duration: 10,
+  width: 1920, height: 1080, margin: 24, background: '#292a27', fps: 30, duration: 10,
 };
 
 export const createBox = (rect: GridRect, contentType: ContentType = 'sketch'): BentoBox => ({
@@ -94,18 +93,18 @@ export function firstAvailable(boxes: BentoBox[], columns: number, w = 4, h = 3)
 export function gridMetrics(project: Project) {
   const unitX = project.width / GRID_COLUMNS;
   const unitY = project.height / GRID_ROWS;
-  const marginX = unitX * GRID_MARGIN_RATIO;
-  const marginY = unitY * GRID_MARGIN_RATIO;
+  const marginX = project.margin;
+  const marginY = project.margin;
   return { unitX, unitY, marginX, marginY, columns: GRID_COLUMNS, rows: GRID_ROWS };
 }
 
 export type GridMetrics = ReturnType<typeof gridMetrics>;
 
 export function gridRectToProject(rect: GridRect, metrics: GridMetrics) {
-  const x = rect.x * metrics.unitX + metrics.marginX / 2;
-  const y = rect.y * metrics.unitY + metrics.marginY / 2;
-  const right = (rect.x + rect.w) * metrics.unitX - metrics.marginX / 2;
-  const bottom = (rect.y + rect.h) * metrics.unitY - metrics.marginY / 2;
+  const x = rect.x * metrics.unitX + (rect.x === 0 ? metrics.marginX : metrics.marginX / 2);
+  const y = rect.y * metrics.unitY + (rect.y === 0 ? metrics.marginY : metrics.marginY / 2);
+  const right = (rect.x + rect.w) * metrics.unitX - (rect.x + rect.w === metrics.columns ? metrics.marginX : metrics.marginX / 2);
+  const bottom = (rect.y + rect.h) * metrics.unitY - (rect.y + rect.h === metrics.rows ? metrics.marginY : metrics.marginY / 2);
   return { x, y, width: right - x, height: bottom - y };
 }
 

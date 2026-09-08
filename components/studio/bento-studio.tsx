@@ -55,7 +55,8 @@ export function BentoStudio() {
   const projectRef = useRef(project);
   const mediaRefs = useRef(new Map<string, MediaElement>());
   const metrics = useMemo(() => gridMetrics(project), [project]);
-  const { unitX, unitY, marginX, marginY, columns } = metrics;
+  const { unitX, unitY, columns } = metrics;
+  const maxProjectMargin = Math.max(1, Math.floor(Math.min(unitX, unitY) * 0.4));
   const selected = boxes.find((box) => box.id === selectedId) ?? null;
 
   useEffect(() => { boxesRef.current = boxes; }, [boxes]);
@@ -116,7 +117,9 @@ export function BentoStudio() {
 
   const changeProjectDimension = (key: 'width' | 'height', value: number) => {
     if (!Number.isFinite(value) || value < 320 || value > 7680) return;
-    const next = { ...project, [key]: Math.round(value) };
+    const resized = { ...project, [key]: Math.round(value) };
+    const marginLimit = Math.max(1, Math.floor(Math.min(resized.width / 8, resized.height / 8) * 0.4));
+    const next = { ...resized, margin: Math.min(resized.margin, marginLimit) };
     const rects = presetLayout(boxes.length, gridMetrics(next).columns);
     setProject(next);
     setBoxes((current) => current.map((box, index) => ({ ...box, ...rects[index] })));
@@ -223,6 +226,7 @@ export function BentoStudio() {
           <section className="control-section">
             <div className="section-heading"><span>01</span><h2>Project</h2></div>
             <div className="field-label"><span>Aantal Bento’s</span><div className="count-stepper"><Button type="button" variant="outline" aria-label="Minder Bento’s" disabled={boxes.length <= 1} onClick={() => applyPreset(boxes.length - 1)}><Minus /></Button><output aria-live="polite">{boxes.length}</output><Button type="button" variant="outline" aria-label="Meer Bento’s" disabled={boxes.length >= 6} onClick={() => applyPreset(boxes.length + 1)}><Plus /></Button></div></div>
+            <ControlSlider label="Marge" value={project.margin} min={0} max={maxProjectMargin} suffix="px" onChange={(value) => setProject({ ...project, margin: value })} />
             <div className="field-grid"><NumberField label="Breedte" value={project.width} min={320} onChange={(value) => changeProjectDimension('width', value)} /><NumberField label="Hoogte" value={project.height} min={320} onChange={(value) => changeProjectDimension('height', value)} /></div>
             <label className="field-label color-field">Canvasachtergrond<input type="color" value={project.background} onChange={(event) => setProject({ ...project, background: event.target.value })} /></label>
             <div className="field-grid"><NumberField label="Framerate" value={project.fps} min={1} onChange={(value) => setProject({ ...project, fps: Math.min(60, Math.max(1, Math.round(value))) })} /><NumberField label="Duur (sec)" value={project.duration} min={1} onChange={(value) => setProject({ ...project, duration: Math.min(60, Math.max(1, value)) })} /></div>
@@ -264,7 +268,7 @@ export function BentoStudio() {
             </div>)}
           </div>
         </div>
-        <footer className="status-bar"><span aria-live="polite" className="footer-message">{message}</span><span>{project.width} × {project.height}</span><span>{Math.round(viewScale * 100)}%</span><span>Raster {formatNumber(unitX)} × {formatNumber(unitY)} px</span><span>Marge {formatNumber(marginX)} × {formatNumber(marginY)} px</span><span>{boxes.length} {boxes.length === 1 ? 'Bento' : "Bento's"}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
+        <footer className="status-bar"><span aria-live="polite" className="footer-message">{message}</span><span>{project.width} × {project.height}</span><span>{Math.round(viewScale * 100)}%</span><span>Raster {formatNumber(unitX)} × {formatNumber(unitY)} px</span><span>Marge {formatNumber(project.margin)} px</span><span>{boxes.length} {boxes.length === 1 ? 'Bento' : "Bento's"}</span><span className="status-tip">Scroll boven een box om alleen de inhoud te zoomen</span></footer>
       </section>
     </main>
   );
