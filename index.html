@@ -1,18 +1,194 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>NZ</title>
-
-    <link rel="stylesheet" type="text/css" href="style.css">
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Schets</title>
+    <link rel="stylesheet" href="style.css" />
     <script src="libraries/p5.min.js"></script>
-    <script src="libraries/p5.sound.min.js"></script>
   </head>
 
   <body>
+    <main class="tool">
+      <aside class="panel">
+        <section class="section">
+          <h1>Schets</h1>
+
+          <div class="control">
+            <label for="grid-size">Grid grootte</label>
+            <input id="grid-size" type="range" min="32" max="120" value="64" step="4" />
+          </div>
+
+          <div class="control">
+            <label for="show-grid">Grid lijnen</label>
+            <input id="show-grid" type="checkbox" />
+          </div>
+
+          <div class="control">
+            <label for="pattern">Patroon</label>
+            <select id="pattern">
+              <option value="center">Centrum — 2</option>
+              <option value="alternating">Om en om</option>
+              <option value="empty">Leeg</option>
+              <option value="line">Rechte lijn</option>
+              <option value="cross">Kruis</option>
+              <option value="diagonal">Diagonalen</option>
+              <option value="ring">Binnenring</option>
+              <option value="steps">Traptrede</option>
+            </select>
+          </div>
+
+          <div class="control">
+            <label for="logo-variant">Logo stijl</label>
+            <select id="logo-variant"></select>
+          </div>
+
+          <div class="control">
+            <span></span>
+            <button id="apply-pattern">Patroon toepassen</button>
+          </div>
+
+          <div class="control">
+            <span>Logo's</span>
+            <div class="logo-buttons">
+              <button id="remove-logo" aria-label="Verwijder geselecteerd logo">−</button>
+              <output id="logo-count">2</output>
+              <button id="add-logo" aria-label="Voeg logo toe">+</button>
+            </div>
+          </div>
+
+          <div class="control">
+            <span></span>
+            <button id="domino">Domino</button>
+          </div>
+
+          <div class="control">
+            <label for="domino-loop">Noise veld</label>
+            <input id="domino-loop" type="checkbox" />
+          </div>
+
+          <div class="control">
+            <span>Voorgrond</span>
+            <div class="swatches" id="foreground-colors">
+              <button class="swatch active" data-color="#F28EFF" style="--color:#F28EFF" aria-label="Roze"></button>
+              <button class="swatch" data-color="#270C13" style="--color:#270C13" aria-label="Donkerroze"></button>
+              <button class="swatch" data-color="#FF8D8C" style="--color:#FF8D8C" aria-label="Rood"></button>
+            </div>
+          </div>
+
+          <div class="control">
+            <span>Achtergrond</span>
+            <div class="swatches" id="background-colors">
+              <button class="swatch" data-color="#F28EFF" style="--color:#F28EFF" aria-label="Roze"></button>
+              <button class="swatch active" data-color="#270C13" style="--color:#270C13" aria-label="Donkerroze"></button>
+              <button class="swatch" data-color="#FF8D8C" style="--color:#FF8D8C" aria-label="Rood"></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>Keyframes</h2>
+
+          <div class="control">
+            <label for="easing">Easing</label>
+            <select id="easing">
+              <optgroup label="Basis">
+                <option value="linear">Linear</option>
+                <option value="easeInQuad">Ease in quad</option>
+                <option value="easeOutQuad">Ease out quad</option>
+                <option value="easeInOutQuad">Ease in-out quad</option>
+                <option value="easeInCubic">Ease in cubic</option>
+                <option value="easeOutCubic">Ease out cubic</option>
+                <option value="easeInOutCubic" selected>Ease in-out cubic</option>
+                <option value="easeInQuart">Ease in quart</option>
+                <option value="easeOutQuart">Ease out quart</option>
+                <option value="easeInOutQuart">Ease in-out quart</option>
+                <option value="easeInQuint">Ease in quint</option>
+                <option value="easeOutQuint">Ease out quint</option>
+                <option value="easeInOutQuint">Ease in-out quint</option>
+              </optgroup>
+              <optgroup label="Vloeiend">
+                <option value="easeInSine">Ease in sine</option>
+                <option value="easeOutSine">Ease out sine</option>
+                <option value="easeInOutSine">Ease in-out sine</option>
+                <option value="easeInExpo">Ease in expo</option>
+                <option value="easeOutExpo">Ease out expo</option>
+                <option value="easeInOutExpo">Ease in-out expo</option>
+                <option value="easeInCirc">Ease in circ</option>
+                <option value="easeOutCirc">Ease out circ</option>
+                <option value="easeInOutCirc">Ease in-out circ</option>
+              </optgroup>
+              <optgroup label="Funky">
+                <option value="easeInBack">Back in</option>
+                <option value="easeOutBack">Back out</option>
+                <option value="easeInOutBack">Back in-out</option>
+                <option value="easeInBounce">Bounce in</option>
+                <option value="easeOutBounce">Bounce out</option>
+                <option value="easeInOutBounce">Bounce in-out</option>
+                <option value="easeInElastic">Elastic in</option>
+                <option value="easeOutElastic">Elastic out</option>
+                <option value="easeInOutElastic">Elastic in-out</option>
+                <option value="steps4">Steps ×4</option>
+                <option value="steps8">Steps ×8</option>
+                <option value="wiggle">Wiggle</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <div class="control">
+            <label for="stagger">Stagger</label>
+            <input id="stagger" type="range" min="0" max="1" value="0" step="0.01" />
+          </div>
+
+          <div class="control align-start">
+            <label for="keyframe-list">Keyframes</label>
+            <select id="keyframe-list" size="5"></select>
+          </div>
+
+          <div class="keyframe-buttons">
+            <button id="add-keyframe">+</button>
+            <button id="remove-keyframe">−</button>
+            <button id="update-keyframe">Update</button>
+          </div>
+
+          <div class="control">
+            <label for="duration">Lengte (ms)</label>
+            <input id="duration" type="number" min="100" step="100" value="800" />
+          </div>
+
+          <div class="control">
+            <span></span>
+            <button id="play">Play</button>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>Export</h2>
+
+          <div class="control">
+            <label for="canvas-width">Breedte</label>
+            <input id="canvas-width" type="number" min="200" max="1920" value="600" />
+          </div>
+
+          <div class="control">
+            <label for="canvas-height">Hoogte</label>
+            <input id="canvas-height" type="number" min="200" max="1920" value="600" />
+          </div>
+
+          <div class="export-buttons">
+            <button id="export-png">PNG</button>
+            <button id="export-mp4">MP4</button>
+          </div>
+
+          <p id="status" aria-live="polite"></p>
+        </section>
+      </aside>
+
+      <section class="stage">
+        <div id="canvas-container"></div>
+      </section>
+    </main>
+
     <script src="sketch.js"></script>
   </body>
 </html>
