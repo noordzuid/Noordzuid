@@ -14,12 +14,14 @@ let state = {
   pattern: 'center',
   gridSize: 64,
   gridPhase: 0,
+  focusOnLogo: false,
   showGrid: false,
   logoVariant: 'original',
   logoText: 'NOORDZUID',
   logoLayout: 'horizontal',
   noiseMotion: 'playful',
   noiseDensity: 'balanced',
+  noiseLogoStyle: false,
   foreground: '#F28EFF',
   background: '#270C13',
   logos: [
@@ -45,11 +47,13 @@ let canvasResizeObserver;
 let moves = {};
 let logoImages = {};
 let logoRenderCache = {};
+let textGlyphCache = {};
 let noiseIteration = 0;
 let nextNoiseMoveAt = 0;
 let fallBodies = [];
 let lastFallUpdate = 0;
 let playbackFallActive = false;
+let playbackNoiseRuntime = null;
 
 function preload() {
   LOGO_VARIANTS.forEach(variant => {
@@ -76,6 +80,9 @@ function setup() {
   connectControls();
   addKeyframe();
   syncControls();
+  if (document.fonts) {
+    document.fonts.load('100px Saans').then(clearLogoRenderCache);
+  }
   showStatus('Linksklik om te rollen · rechtermuisklik om een cel te vullen of legen');
 }
 
@@ -88,17 +95,35 @@ function draw() {
     const elapsed = millis() - animationStart;
     drawingState = playbackState(elapsed);
 
-    if (playing && elapsed >= animationDuration()) {
-      state = cloneState(keyframes[keyframes.length - 1]);
-      selectedKeyframe = keyframes.length - 1;
-      stopPlayback();
-      syncControls();
-    }
-
     if (drawingState.mode === 'fall') {
       drawingState = playbackFallState(drawingState);
     } else {
       playbackFallActive = false;
+    }
+
+    if (drawingState.mode === 'noise') {
+      drawingState = playbackNoiseState(drawingState);
+    } else {
+      playbackNoiseRuntime = null;
+    }
+
+    if (playing && elapsed >= animationDuration()) {
+      const finalState = cloneState(keyframes[keyframes.length - 1]);
+
+      // Keep the final physics pose so stopping playback cannot snap back to
+      // the grid positions stored in the fall keyframe.
+      if (finalState.mode === 'fall' && drawingState.mode === 'fall') {
+        finalState.logos = drawingState.logos.map(logo => ({ ...logo }));
+      }
+      if (finalState.mode === 'noise' && drawingState.mode === 'noise') {
+        finalState.logos = (playbackNoiseRuntime?.state.logos || drawingState.logos)
+          .map(logo => ({ ...logo }));
+      }
+
+      state = finalState;
+      selectedKeyframe = keyframes.length - 1;
+      stopPlayback();
+      syncControls();
     }
   }
 
@@ -114,11 +139,6 @@ function draw() {
   }
 
   visibleLogos.forEach((visibleLogo, index) => {
-    if (
-      visibleLogo.col < 0 || visibleLogo.col >= drawingGrid.cols ||
-      visibleLogo.row < 0 || visibleLogo.row >= drawingGrid.rows
-    ) return;
-
     drawLogo(visibleLogo, drawingState, drawingGrid, index);
 
     if (drawingState.showGrid && index === selectedLogo && !exporting && !exportingPNG) {
@@ -159,14 +179,21 @@ function cellRotation(col, row, nearRotation = 0, phase = state.gridPhase || 0) 
   return base + round((nearRotation - base) / 360) * 360;
 }
 
+function remapLogoBetweenGrids(logo, fromGrid, toGrid) {
+  const center = cellCenter(logo.col, logo.row, fromGrid);
+  return canvasPointToLogo(center, logo.rotation, toGrid);
+}
+
 function viewGridMetrics(drawingState) {
   const grid = gridMetrics(drawingState.gridSize);
-  const focusAmount = drawingState.viewFocus ?? (drawingState.mode === 'logo' ? 1 : 0);
+  const focusAmount = drawingState.viewFocus ?? (drawingState.focusOnLogo ? 1 : 0);
   if (focusAmount <= 0 || !drawingState.logos.length) return grid;
 
   const focusLogos = drawingState.focusLogos?.length
     ? drawingState.focusLogos
-    : drawingState.logos;
+    : drawingState.mode === 'logo'
+      ? drawingState.logos
+      : [drawingState.logos[constrain(selectedLogo, 0, drawingState.logos.length - 1)]];
   const logoCount = focusLogos.length;
   const availableCells = logoCount === 1 ? 1.55 : 2.55;
   const fittedFocusCell = min(width, height) / availableCells;
@@ -233,7 +260,11 @@ function drawLogo(logo, drawingState, grid, logoIndex) {
   translate(x, y);
   rotate(radians(logo.rotation));
 
-  if (drawingState.logoVariant === 'text') {
+  const logoVariant = drawingState.mode === 'noise' && drawingState.noiseLogoStyle
+    ? (logo.variant || 'original')
+    : drawingState.logoVariant;
+
+  if (logoVariant === 'text') {
     drawTextLogo(
       drawingState,
       logo.glyphIndex ?? logoIndex,
@@ -241,7 +272,7 @@ function drawLogo(logo, drawingState, grid, logoIndex) {
     );
   } else {
     const logoImage = renderedLogo(
-      drawingState.logoVariant || 'original',
+      logoVariant || 'original',
       drawingState.foreground,
       length
     );
@@ -256,38 +287,68 @@ function drawTextLogo(drawingState, logoIndex, size) {
   const content = drawingState.logoText || 'NOORDZUID';
   const characters = Array.from(content.replace(/\s/g, ''));
   const character = characters[logoIndex % max(1, characters.length)] || 'N';
-  const measureSize = 100;
+  const glyph = renderedTextGlyph(character);
 
-  textFont('Saans');
-  textStyle(NORMAL);
-  textSize(measureSize);
-  let metrics = drawingContext.measureText(character);
+  push();
+  imageMode(CENTER);
+  tint(drawingState.foreground);
+  image(glyph, 0, 0, size, size);
+  noTint();
+  pop();
+}
+
+function renderedTextGlyph(character) {
+  const cacheKey = `${character}-${pixelDensity()}`;
+  if (textGlyphCache[cacheKey]) return textGlyphCache[cacheKey];
+
+  if (Object.keys(textGlyphCache).length >= 32) {
+    Object.values(textGlyphCache).forEach(buffer => buffer.remove());
+    textGlyphCache = {};
+  }
+
+  // Render a glyph once at a generous fixed resolution. Zooming can then use
+  // the GPU to scale this bitmap instead of laying out and rasterising every
+  // visible letter again on every animation frame.
+  const bufferSize = 512;
+  const measureSize = 100;
+  const buffer = createGraphics(bufferSize, bufferSize);
+  buffer.clear();
+  buffer.noStroke();
+  buffer.fill(255);
+  buffer.textFont('Saans');
+  buffer.textStyle(NORMAL);
+  buffer.textSize(measureSize);
+
+  let metrics = buffer.drawingContext.measureText(character);
   const hasExactBounds = Number.isFinite(metrics.actualBoundingBoxLeft) &&
     Number.isFinite(metrics.actualBoundingBoxRight) &&
     Number.isFinite(metrics.actualBoundingBoxAscent) &&
     Number.isFinite(metrics.actualBoundingBoxDescent);
   const measuredWidth = hasExactBounds
     ? metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight
-    : textWidth(character);
+    : buffer.textWidth(character);
   const measuredHeight = hasExactBounds
     ? metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
-    : textAscent() + textDescent();
-  const fittedSize = measureSize * (size * 0.96) / max(measuredWidth, measuredHeight, 1);
+    : buffer.textAscent() + buffer.textDescent();
+  const fittedSize = measureSize * (bufferSize * 0.96) /
+    max(measuredWidth, measuredHeight, 1);
 
-  noStroke();
-  fill(drawingState.foreground);
-  textSize(fittedSize);
-
+  buffer.textSize(fittedSize);
   if (hasExactBounds) {
-    textAlign(LEFT, BASELINE);
-    metrics = drawingContext.measureText(character);
-    const x = (metrics.actualBoundingBoxLeft - metrics.actualBoundingBoxRight) / 2;
-    const y = (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
-    text(character, x, y);
+    buffer.textAlign(LEFT, BASELINE);
+    metrics = buffer.drawingContext.measureText(character);
+    const x = bufferSize / 2 +
+      (metrics.actualBoundingBoxLeft - metrics.actualBoundingBoxRight) / 2;
+    const y = bufferSize / 2 +
+      (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+    buffer.text(character, x, y);
   } else {
-    textAlign(CENTER, CENTER);
-    text(character, 0, 0);
+    buffer.textAlign(CENTER, CENTER);
+    buffer.text(character, bufferSize / 2, bufferSize / 2);
   }
+
+  textGlyphCache[cacheKey] = buffer;
+  return buffer;
 }
 
 function renderedLogo(variantId, foreground, size) {
@@ -326,6 +387,8 @@ function renderedLogo(variantId, foreground, size) {
 function clearLogoRenderCache() {
   Object.values(logoRenderCache).forEach(buffer => buffer.remove());
   logoRenderCache = {};
+  Object.values(textGlyphCache).forEach(buffer => buffer.remove());
+  textGlyphCache = {};
 }
 
 function drawSelectionIndicator(logo, grid) {
@@ -409,7 +472,7 @@ function mousePressed(event) {
     if (state.mode === 'logo') {
       document.getElementById('logo-amount').value = String(state.logos.length);
     }
-    autoUpdateKeyframe();
+    autoUpdateKeyframe({ preserveFallLayout: false });
     return false;
   }
 
@@ -475,7 +538,18 @@ function movingLogo(index, fallback) {
   }
 
   const raw = elapsed / move.duration;
-  return rollPathPose(move.path, raw, state.gridSize);
+  const visibleLogo = {
+    ...fallback,
+    ...rollPathPose(move.path, raw, state.gridSize)
+  };
+
+  if (move.fromVariant || move.toVariant) {
+    visibleLogo.variant = raw < 0.5
+      ? (move.fromVariant || move.toVariant)
+      : (move.toVariant || move.fromVariant);
+  }
+
+  return visibleLogo;
 }
 
 function buildRollPath(from, targetCol, targetRow, grid, blocked = [], phase = state.gridPhase || 0) {
@@ -532,14 +606,23 @@ function buildRollPath(from, targetCol, targetRow, grid, blocked = [], phase = s
     current = parents.get(`${current.col},${current.row}`);
   }
 
-  let rotation = cellRotation(from.col, from.row, from.rotation, phase);
+  let rotation = from.rotation;
   return cells.map((cell, index) => {
     if (index > 0) {
-      rotation = cellRotation(cell.col, cell.row, rotation, phase);
+      rotation += anchoredTurn(cells[index - 1], cell);
     }
 
     return { ...cell, rotation };
   });
+}
+
+function anchoredTurn(from, to) {
+  const directionX = Math.sign(to.col - from.col);
+  const directionY = Math.sign(to.row - from.row);
+
+  if (directionX !== 0) return directionX * 90;
+  if (directionY !== 0) return directionY * 90;
+  return 0;
 }
 
 function rollPathPose(path, progress, gridSize, easing = easingType) {
@@ -593,15 +676,13 @@ function rollStepPose(from, to, progress, grid) {
   let pivot;
 
   if (directionX !== 0) {
-    const pivotSide = Math.sign(turn / directionX) || 1;
     pivot = {
       x: start.x + directionX * grid.pitch / 2,
-      y: start.y + pivotSide * grid.pitch / 2
+      y: start.y + grid.pitch / 2
     };
   } else {
-    const pivotSide = Math.sign(-turn / directionY) || -1;
     pivot = {
-      x: start.x + pivotSide * grid.pitch / 2,
+      x: start.x - grid.pitch / 2,
       y: start.y + directionY * grid.pitch / 2
     };
   }
@@ -682,10 +763,20 @@ function connectControls() {
     state.gridPhase = ((state.gridPhase || 0) - shiftCol - shiftRow) % 2;
     if (state.gridPhase < 0) state.gridPhase += 2;
 
-    state.logos.forEach(logo => {
-      logo.col += shiftCol;
-      logo.row += shiftRow;
-    });
+    if (state.mode === 'fall') {
+      state.logos = state.logos.map(logo => remapLogoBetweenGrids(logo, oldGrid, newGrid));
+      const currentKeyframe = keyframes[selectedKeyframe];
+      if (currentKeyframe?.mode === 'fall') {
+        currentKeyframe.logos = currentKeyframe.logos.map(logo => (
+          remapLogoBetweenGrids(logo, oldGrid, newGrid)
+        ));
+      }
+    } else {
+      state.logos.forEach(logo => {
+        logo.col += shiftCol;
+        logo.row += shiftRow;
+      });
+    }
 
     state.gridSize = newSize;
     event.target.value = newSize;
@@ -696,6 +787,10 @@ function connectControls() {
 
   document.getElementById('show-grid').addEventListener('change', event => {
     state.showGrid = event.target.checked;
+    autoUpdateKeyframe();
+  });
+  document.getElementById('focus-logo').addEventListener('change', event => {
+    state.focusOnLogo = event.target.checked;
     autoUpdateKeyframe();
   });
 
@@ -711,6 +806,11 @@ function connectControls() {
   document.getElementById('noise-density').addEventListener('change', event => {
     state.noiseDensity = event.target.value;
     applyNoiseField();
+    autoUpdateKeyframe();
+  });
+  document.getElementById('noise-logo-style').addEventListener('change', event => {
+    state.noiseLogoStyle = event.target.checked;
+    if (state.noiseLogoStyle) applyNoiseStyles();
     autoUpdateKeyframe();
   });
   document.getElementById('logo-amount').addEventListener('change', () => {
@@ -832,7 +932,14 @@ function applyNoiseField() {
   state.logos = cells
     .sort((a, b) => b.score - a.score)
     .slice(0, amount)
-    .map(({ col, row }) => ({ col, row, rotation: cellRotation(col, row) }));
+    .map(({ col, row }, index) => ({
+      col,
+      row,
+      rotation: cellRotation(col, row),
+      ...(state.noiseLogoStyle
+        ? { variant: noiseVariantFor(col, row, noiseIteration, index) }
+        : {})
+    }));
   selectedLogo = 0;
   noiseIteration++;
   moves = {};
@@ -844,10 +951,12 @@ function applyNoiseStep() {
   if (state.mode !== 'noise' || !state.logos.length) return;
 
   const grid = gridMetrics(state.gridSize);
+  const stepStart = millis();
   const startingCells = new Set(state.logos.map(logo => `${logo.col},${logo.row}`));
   const targets = new Set();
   const settings = noiseMotionSettings();
   const nextLogos = state.logos.map(logo => ({ ...logo }));
+  const previousVariants = state.logos.map(logo => logo.variant || 'original');
   moves = {};
 
   state.logos.forEach((logo, logoIndex) => {
@@ -890,18 +999,49 @@ function applyNoiseStep() {
     if (!path.length) return;
 
     const endpoint = path[path.length - 1];
-    endpoint.rotation = cellRotation(endpoint.col, endpoint.row, logo.rotation);
     nextLogos[logoIndex] = { ...endpoint };
     moves[logoIndex] = {
       path,
-      start: millis(),
+      start: stepStart,
       duration: settings.duration
     };
   });
 
   state.logos = nextLogos;
+  if (state.noiseLogoStyle) {
+    Object.keys(moves).forEach(indexKey => {
+      const logoIndex = Number(indexKey);
+      const logo = state.logos[logoIndex];
+      logo.variant = noiseVariantFor(
+        logo.col,
+        logo.row,
+        noiseIteration + 1,
+        logoIndex
+      );
+      moves[logoIndex].fromVariant = previousVariants[logoIndex];
+      moves[logoIndex].toVariant = logo.variant;
+    });
+  }
   noiseIteration++;
   nextNoiseMoveAt = millis() + settings.duration + settings.pause;
+}
+
+function applyNoiseStyles(iteration = noiseIteration) {
+  state.logos.forEach((logo, index) => {
+    logo.variant = noiseVariantFor(logo.col, logo.row, iteration, index);
+  });
+}
+
+function noiseVariantFor(col, row, iteration, index = 0) {
+  const variants = LOGO_VARIANTS.filter(variant => variant.id !== 'text');
+  const seed = sin(
+    (col + 1) * 12.9898 +
+    (row + 1) * 78.233 +
+    (iteration + 1) * 37.719 +
+    index * 0.173
+  ) * 43758.5453;
+  const value = seed - floor(seed);
+  return variants[floor(value * variants.length)].id;
 }
 
 function noiseMotionSettings() {
@@ -919,6 +1059,58 @@ function updateNoiseMotion() {
   ) return;
 
   applyNoiseStep();
+}
+
+function playbackNoiseState(drawingState) {
+  if (!playbackNoiseRuntime) {
+    playbackNoiseRuntime = {
+      state: cloneState(drawingState),
+      moves: {},
+      iteration: noiseIteration,
+      nextMoveAt: millis()
+    };
+  }
+
+  // Reuse the exact preview engine, but keep its mutable state separate from
+  // the stored keyframes. This also lets a single keyframe keep generating
+  // noise for its entire playback/export duration.
+  playbackNoiseRuntime.state = {
+    ...cloneState(drawingState),
+    logos: playbackNoiseRuntime.state.logos
+  };
+
+  const savedState = state;
+  const savedMoves = moves;
+  const savedIteration = noiseIteration;
+  const savedNextMoveAt = nextNoiseMoveAt;
+  let visibleLogos;
+
+  try {
+    state = playbackNoiseRuntime.state;
+    moves = playbackNoiseRuntime.moves;
+    noiseIteration = playbackNoiseRuntime.iteration;
+    nextNoiseMoveAt = playbackNoiseRuntime.nextMoveAt;
+
+    if (millis() >= nextNoiseMoveAt && Object.keys(moves).length === 0) {
+      applyNoiseStep();
+    }
+
+    visibleLogos = state.logos.map((logo, index) => movingLogo(index, logo));
+    playbackNoiseRuntime.state = state;
+    playbackNoiseRuntime.moves = moves;
+    playbackNoiseRuntime.iteration = noiseIteration;
+    playbackNoiseRuntime.nextMoveAt = nextNoiseMoveAt;
+  } finally {
+    state = savedState;
+    moves = savedMoves;
+    noiseIteration = savedIteration;
+    nextNoiseMoveAt = savedNextMoveAt;
+  }
+
+  return {
+    ...drawingState,
+    logos: visibleLogos
+  };
 }
 
 function resetFallBodies(sourceState = state) {
@@ -948,7 +1140,10 @@ function updateFallMotion() {
 }
 
 function playbackFallState(drawingState) {
-  if (!playbackFallActive || fallBodies.length !== drawingState.logos.length) {
+  // Once a fall sequence has started, its bodies remain authoritative across
+  // every consecutive fall keyframe. A temporary logo-count difference in the
+  // keyframe interpolation must never rebuild the whole scene on its grid.
+  if (!playbackFallActive) {
     resetFallBodies(drawingState);
     playbackFallActive = true;
   }
@@ -1189,26 +1384,35 @@ function setActiveColor(container, colorValue) {
 function cloneState(source = state) {
   return {
     ...source,
-    logos: source.logos.map(logo => ({
-      ...logo,
-      rotation: source.mode === 'fall'
-        ? logo.rotation
-        : cellRotation(logo.col, logo.row, logo.rotation, source.gridPhase || 0)
-    }))
+    logos: source.logos.map(logo => ({ ...logo }))
   };
 }
 
 function addKeyframe() {
-  keyframes.push({ ...cloneState(), ...timingFromControls() });
+  const snapshot = cloneState();
+  const currentKeyframe = keyframes[selectedKeyframe];
+
+  if (state.mode === 'fall' && currentKeyframe?.mode === 'fall') {
+    snapshot.logos = currentKeyframe.logos.map(logo => ({ ...logo }));
+  }
+
+  keyframes.push({ ...snapshot, ...timingFromControls() });
   selectedKeyframe = keyframes.length - 1;
   refreshKeyframeList();
   showStatus('Keyframe toegevoegd');
 }
 
-function autoUpdateKeyframe() {
+function autoUpdateKeyframe({ preserveFallLayout = true } = {}) {
   if (!keyframes[selectedKeyframe]) return;
+  const previous = keyframes[selectedKeyframe];
+  const snapshot = cloneState();
+
+  if (preserveFallLayout && state.mode === 'fall' && previous.mode === 'fall') {
+    snapshot.logos = previous.logos.map(logo => ({ ...logo }));
+  }
+
   keyframes[selectedKeyframe] = {
-    ...cloneState(),
+    ...snapshot,
     ...timingFromControls()
   };
   refreshKeyframeList();
@@ -1279,12 +1483,14 @@ function syncControls() {
   document.getElementById('pattern').value = state.pattern || 'center';
   document.getElementById('grid-size').value = state.gridSize;
   document.getElementById('show-grid').checked = state.showGrid;
+  document.getElementById('focus-logo').checked = Boolean(state.focusOnLogo);
   document.getElementById('logo-variant').value = state.logoVariant || 'original';
   document.getElementById('logo-text').value = state.logoText || 'NOORDZUID';
   document.getElementById('logo-layout').value = state.logoLayout || 'horizontal';
   document.getElementById('logo-amount').value = String(constrain(state.logos.length, 1, 2));
   document.getElementById('noise-motion').value = state.noiseMotion || 'playful';
   document.getElementById('noise-density').value = state.noiseDensity || 'balanced';
+  document.getElementById('noise-logo-style').checked = Boolean(state.noiseLogoStyle);
   document.getElementById('duration').value = keyframeDuration(selectedKeyframe);
   document.getElementById('animation-duration').value = keyframeAnimationDuration(selectedKeyframe);
   easingType = keyframes[selectedKeyframe]?.easing || easingType;
@@ -1299,9 +1505,10 @@ function syncControls() {
 
 function togglePlayback() {
   if (playing) return stopPlayback();
-  if (keyframes.length < 2) return showStatus('Voeg minimaal 2 keyframes toe');
+  if (!keyframes.length) return;
 
   moves = {};
+  playbackNoiseRuntime = null;
   playing = true;
   animationStart = millis();
   document.getElementById('play').textContent = 'Stop';
@@ -1311,6 +1518,7 @@ function stopPlayback() {
   playing = false;
   fallBodies = [];
   playbackFallActive = false;
+  playbackNoiseRuntime = null;
   document.getElementById('play').textContent = 'Play';
 }
 
@@ -1327,6 +1535,8 @@ function keyframeAnimationDuration(index) {
 }
 
 function animationDuration() {
+  if (keyframes.length === 1) return keyframeDuration(0);
+
   return keyframes
     .slice(0, -1)
     .reduce((total, keyframe, index) => total + keyframeDuration(index), 0);
@@ -1476,7 +1686,7 @@ function exitRollPath(logo, grid, phase = state.gridPhase || 0) {
       col: current.col + direction.col,
       row: current.row + direction.row
     };
-    target.rotation = cellRotation(target.col, target.row, current.rotation, phase);
+    target.rotation = current.rotation + anchoredTurn(current, target);
     path.push(target);
     current = target;
   }
@@ -1492,12 +1702,7 @@ function enterRollPath(logo, grid, phase = state.gridPhase || 0) {
   path[path.length - 1].rotation = logo.rotation;
 
   for (let index = path.length - 2; index >= 0; index--) {
-    path[index].rotation = cellRotation(
-      path[index].col,
-      path[index].row,
-      path[index + 1].rotation,
-      phase
-    );
+    path[index].rotation = path[index + 1].rotation - anchoredTurn(path[index], path[index + 1]);
   }
 
   return path;
@@ -1525,7 +1730,7 @@ function outwardDirection(logo, grid) {
 }
 
 function playbackState(elapsed) {
-  if (keyframes.length < 2) return state;
+  if (keyframes.length < 2) return cloneState(keyframes[0] || state);
 
   const safeElapsed = max(0, elapsed);
   let segment = 0;
@@ -1544,6 +1749,9 @@ function playbackState(elapsed) {
   const segmentElapsed = elapsed - segmentStart;
   const from = keyframes[segment];
   const to = keyframes[segment + 1];
+  const raw = constrain(segmentElapsed / plan.animationDuration, 0, 1);
+  const eased = applyEasing(raw, from.easing || easingType);
+  const colorProgress = constrain(eased, 0, 1);
 
   // Leaving physics is a deliberate hard cut: never rebuild fallen items onto a grid.
   if (from.mode === 'fall' && to.mode !== 'fall') {
@@ -1552,9 +1760,36 @@ function playbackState(elapsed) {
       : cloneState(to);
   }
 
-  const raw = constrain(segmentElapsed / plan.animationDuration, 0, 1);
-  const eased = applyEasing(raw, from.easing || easingType);
-  const colorProgress = constrain(eased, 0, 1);
+  // Enter physics immediately and use the source keyframe's untouched grid
+  // positions. Previously the mode switched halfway through the normal grid
+  // transition, which made the fall start mid-roll and reset at that switch.
+  if (to.mode === 'fall' && from.mode !== 'fall') {
+    const fallState = cloneState(raw >= 1 ? to : from);
+    fallState.mode = 'fall';
+    fallState.focusOnLogo = raw < 0.5
+      ? Boolean(from.focusOnLogo)
+      : Boolean(to.focusOnLogo);
+    fallState.viewFocus = lerp(
+      from.focusOnLogo ? 1 : 0,
+      to.focusOnLogo ? 1 : 0,
+      colorProgress
+    );
+    fallState.gridSize = lerp(from.gridSize, to.gridSize, colorProgress);
+    fallState.showGrid = raw < 0.5 ? from.showGrid : to.showGrid;
+    fallState.foreground = lerpColor(
+      color(from.foreground),
+      color(to.foreground),
+      colorProgress
+    ).toString('#rrggbb');
+    fallState.background = lerpColor(
+      color(from.background),
+      color(to.background),
+      colorProgress
+    ).toString('#rrggbb');
+    fallState.logos = from.logos.map(logo => ({ ...logo }));
+    return fallState;
+  }
+
   const logos = from.logos.map(logo => ({ ...logo }));
   const enteringLogos = [];
   const sourceFocusLogos = [];
@@ -1564,7 +1799,21 @@ function playbackState(elapsed) {
     const progress = item.duration > 0
       ? constrain((segmentElapsed - item.start) / item.duration, 0, 1)
       : 1;
-    const pose = rollPathPose(item.path, progress, from.gridSize, from.easing || easingType);
+    const poseSource = item.kind === 'enter'
+      ? to.logos[item.targetIndex]
+      : from.logos[item.logoIndex];
+    const pose = {
+      ...poseSource,
+      ...rollPathPose(item.path, progress, from.gridSize, from.easing || easingType)
+    };
+
+    if (from.noiseLogoStyle || to.noiseLogoStyle) {
+      const sourceVariant = from.logos[item.logoIndex]?.variant;
+      const targetVariant = to.logos[item.targetIndex]?.variant;
+      pose.variant = raw < 0.5
+        ? (sourceVariant || targetVariant || 'original')
+        : (targetVariant || sourceVariant || 'original');
+    }
 
     if (item.kind === 'enter') {
       const enteringLogo = {
@@ -1593,16 +1842,17 @@ function playbackState(elapsed) {
 
   logos.push(...enteringLogos);
 
-  const focusLogos = to.mode === 'logo'
+  const focusLogos = to.focusOnLogo && to.mode === 'logo'
     ? targetFocusLogos
-    : from.mode === 'logo'
+    : from.focusOnLogo && from.mode === 'logo'
       ? sourceFocusLogos
-      : logos;
+      : [logos[constrain(selectedLogo, 0, max(0, logos.length - 1))]].filter(Boolean);
 
   return {
     mode: raw < 0.5 ? (from.mode || 'pattern') : (to.mode || 'pattern'),
     pattern: raw < 0.5 ? (from.pattern || 'center') : (to.pattern || 'center'),
-    viewFocus: lerp(from.mode === 'logo' ? 1 : 0, to.mode === 'logo' ? 1 : 0, colorProgress),
+    focusOnLogo: raw < 0.5 ? Boolean(from.focusOnLogo) : Boolean(to.focusOnLogo),
+    viewFocus: lerp(from.focusOnLogo ? 1 : 0, to.focusOnLogo ? 1 : 0, colorProgress),
     gridSize: lerp(from.gridSize, to.gridSize, colorProgress),
     gridPhase: raw < 0.5 ? (from.gridPhase || 0) : (to.gridPhase || 0),
     showGrid: raw < 0.5 ? from.showGrid : to.showGrid,
@@ -1615,6 +1865,15 @@ function playbackState(elapsed) {
     logoText: raw < 0.5
       ? (from.logoText || 'NOORDZUID')
       : (to.logoText || 'NOORDZUID'),
+    noiseMotion: raw < 0.5
+      ? (from.noiseMotion || 'playful')
+      : (to.noiseMotion || 'playful'),
+    noiseDensity: raw < 0.5
+      ? (from.noiseDensity || 'balanced')
+      : (to.noiseDensity || 'balanced'),
+    noiseLogoStyle: raw < 0.5
+      ? Boolean(from.noiseLogoStyle)
+      : Boolean(to.noiseLogoStyle),
     foreground: lerpColor(color(from.foreground), color(to.foreground), colorProgress).toString('#rrggbb'),
     background: lerpColor(color(from.background), color(to.background), colorProgress).toString('#rrggbb'),
     focusLogos,
@@ -1762,7 +2021,7 @@ function exportPNG() {
 }
 
 function exportMP4() {
-  if (keyframes.length < 2) return showStatus('Voeg minimaal 2 keyframes toe');
+  if (!keyframes.length) return;
   if (!window.MediaRecorder || !canvasElement.captureStream) return showStatus('MP4-export wordt niet ondersteund');
 
   const mimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
@@ -1788,6 +2047,7 @@ function exportMP4() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     stream.getTracks().forEach(track => track.stop());
     exporting = false;
+    playbackNoiseRuntime = null;
     showStatus('MP4 geëxporteerd');
   });
 
