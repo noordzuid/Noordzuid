@@ -755,7 +755,7 @@ function connectControls() {
 
   document.getElementById('grid-size').addEventListener('input', event => {
     const oldGrid = gridMetrics(state.gridSize);
-    const newSize = constrain(Number(event.target.value) || 64, 32, 120);
+    const newSize = constrain(Number(event.target.value) || 200, 32, 400);
     const newGrid = gridMetrics(newSize);
     const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
     const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
