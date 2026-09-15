@@ -1,5 +1,6 @@
 // Add one SVG here; preload and the interface update automatically.
 const LOGO_VARIANTS = [
+  { id: 'text', label: 'Tekst' },
   { id: 'original', label: 'Origineel', path: 'assets/logo.svg' },
   { id: 'squares', label: 'Vierkanten', path: 'assets/logo-squares.svg' },
   { id: 'circles', label: 'Cirkels', path: 'assets/logo-circles.svg' },
@@ -9,21 +10,29 @@ const LOGO_VARIANTS = [
 ];
 
 let state = {
+  mode: 'pattern',
+  pattern: 'center',
   gridSize: 64,
+  gridPhase: 0,
   showGrid: false,
   logoVariant: 'original',
+  logoText: 'NOORDZUID',
+  logoLayout: 'horizontal',
+  noiseMotion: 'playful',
+  noiseDensity: 'balanced',
   foreground: '#F28EFF',
   background: '#270C13',
   logos: [
-    { col: 4, row: 4, rotation: 0 },
-    { col: 5, row: 4, rotation: 90 }
+    { col: 7, row: 4, rotation: 90 },
+    { col: 8, row: 4, rotation: 0 }
   ]
 };
 
 let keyframes = [];
 let selectedKeyframe = 0;
 let selectedLogo = 0;
-let transitionLength = 600;
+const DEFAULT_KEYFRAME_DURATION = 800;
+const DEFAULT_ANIMATION_DURATION = 600;
 let easingType = 'easeInOutCubic';
 let stagger = 0;
 let playing = false;
@@ -36,13 +45,15 @@ let canvasResizeObserver;
 let moves = {};
 let logoImages = {};
 let logoRenderCache = {};
-let dominoLoop = false;
-let dominoIteration = 0;
-let nextDominoAt = 0;
+let noiseIteration = 0;
+let nextNoiseMoveAt = 0;
+let fallBodies = [];
+let lastFallUpdate = 0;
+let playbackFallActive = false;
 
 function preload() {
   LOGO_VARIANTS.forEach(variant => {
-    logoImages[variant.id] = loadImage(variant.path);
+    if (variant.path) logoImages[variant.id] = loadImage(variant.path);
   });
 }
 
@@ -51,6 +62,7 @@ function setup() {
   canvas.parent('canvas-container');
   canvasElement = canvas.elt;
   canvasContainer = document.getElementById('canvas-container');
+  canvasElement.addEventListener('contextmenu', event => event.preventDefault());
 
   rectMode(CENTER);
   noStroke();
@@ -63,10 +75,13 @@ function setup() {
 
   connectControls();
   addKeyframe();
-  showStatus('Klik een logo en daarna een gridcel');
+  syncControls();
+  showStatus('Linksklik om te rollen · rechtermuisklik om een cel te vullen of legen');
 }
 
 function draw() {
+  updateNoiseMotion();
+  updateFallMotion();
   let drawingState = state;
 
   if (playing || exporting) {
@@ -75,56 +90,112 @@ function draw() {
 
     if (playing && elapsed >= animationDuration()) {
       state = cloneState(keyframes[keyframes.length - 1]);
+      selectedKeyframe = keyframes.length - 1;
       stopPlayback();
       syncControls();
+    }
+
+    if (drawingState.mode === 'fall') {
+      drawingState = playbackFallState(drawingState);
+    } else {
+      playbackFallActive = false;
     }
   }
 
   background(drawingState.background);
 
-  const drawingGrid = gridMetrics(drawingState.gridSize);
+  const visibleLogos = drawingState.logos.map((logo, index) => (
+    playing || exporting ? logo : movingLogo(index, logo)
+  ));
+  const drawingGrid = viewGridMetrics({ ...drawingState, logos: visibleLogos });
 
   if (drawingState.showGrid && !exporting && !exportingPNG) {
     drawGrid(drawingGrid, drawingState.foreground);
   }
 
-  drawingState.logos.forEach((logo, index) => {
-    const visibleLogo = playing || exporting ? logo : movingLogo(index, logo);
-
+  visibleLogos.forEach((visibleLogo, index) => {
     if (
-      visibleLogo.col < 0 || visibleLogo.col >= drawingGrid.count ||
-      visibleLogo.row < 0 || visibleLogo.row >= drawingGrid.count
+      visibleLogo.col < 0 || visibleLogo.col >= drawingGrid.cols ||
+      visibleLogo.row < 0 || visibleLogo.row >= drawingGrid.rows
     ) return;
 
-    drawLogo(visibleLogo, drawingState);
+    drawLogo(visibleLogo, drawingState, drawingGrid, index);
 
     if (drawingState.showGrid && index === selectedLogo && !exporting && !exportingPNG) {
-      drawSelectionIndicator(visibleLogo, drawingState);
+      drawSelectionIndicator(visibleLogo, drawingGrid);
     }
   });
-
-  updateDominoLoop();
 }
 
 function gridMetrics(gridSize) {
-  const viewportSide = min(width, height);
   const cell = gridSize;
   const gap = cell * (10 / 64);
-  let count = max(3, ceil((viewportSide + gap) / (cell + gap)));
+  const pitch = cell + gap;
+  let cols = max(3, ceil((width + gap) / pitch));
+  let rows = max(3, ceil((height + gap) / pitch));
 
-  // An odd count keeps the grid centred. Rounding up clips cells at the edges.
-  if (count % 2 === 0) count++;
+  // Odd dimensions keep a true centre cell; rounding up clips edge cells evenly.
+  if (cols % 2 === 0) cols++;
+  if (rows % 2 === 0) rows++;
 
-  const side = count * cell + (count - 1) * gap;
+  const gridWidth = cols * cell + (cols - 1) * gap;
+  const gridHeight = rows * cell + (rows - 1) * gap;
 
   return {
-    count,
-    side,
+    cols,
+    rows,
+    gridWidth,
+    gridHeight,
     gap,
     cell,
-    pitch: cell + gap,
-    left: (width - side) / 2,
-    top: (height - side) / 2
+    pitch,
+    left: (width - gridWidth) / 2,
+    top: (height - gridHeight) / 2
+  };
+}
+
+function cellRotation(col, row, nearRotation = 0, phase = state.gridPhase || 0) {
+  const base = ((round(col) + round(row) + phase) & 1) * 90;
+  return base + round((nearRotation - base) / 360) * 360;
+}
+
+function viewGridMetrics(drawingState) {
+  const grid = gridMetrics(drawingState.gridSize);
+  const focusAmount = drawingState.viewFocus ?? (drawingState.mode === 'logo' ? 1 : 0);
+  if (focusAmount <= 0 || !drawingState.logos.length) return grid;
+
+  const focusLogos = drawingState.focusLogos?.length
+    ? drawingState.focusLogos
+    : drawingState.logos;
+  const logoCount = focusLogos.length;
+  const availableCells = logoCount === 1 ? 1.55 : 2.55;
+  const fittedFocusCell = min(width, height) / availableCells;
+  const focusCell = fittedFocusCell * (drawingState.gridSize / 64);
+  const focusGap = focusCell * (10 / 64);
+  const focusPitch = focusCell + focusGap;
+  const centerCol = focusLogos.reduce((sum, logo) => sum + logo.col, 0) / logoCount;
+  const centerRow = focusLogos.reduce((sum, logo) => sum + logo.row, 0) / logoCount;
+
+  const focusGrid = {
+    ...grid,
+    cell: focusCell,
+    gap: focusGap,
+    pitch: focusPitch,
+    gridWidth: grid.cols * focusCell + (grid.cols - 1) * focusGap,
+    gridHeight: grid.rows * focusCell + (grid.rows - 1) * focusGap,
+    left: width / 2 - centerCol * focusPitch - focusCell / 2,
+    top: height / 2 - centerRow * focusPitch - focusCell / 2
+  };
+
+  return {
+    ...grid,
+    cell: lerp(grid.cell, focusGrid.cell, focusAmount),
+    gap: lerp(grid.gap, focusGrid.gap, focusAmount),
+    pitch: lerp(grid.pitch, focusGrid.pitch, focusAmount),
+    gridWidth: lerp(grid.gridWidth, focusGrid.gridWidth, focusAmount),
+    gridHeight: lerp(grid.gridHeight, focusGrid.gridHeight, focusAmount),
+    left: lerp(grid.left, focusGrid.left, focusAmount),
+    top: lerp(grid.top, focusGrid.top, focusAmount)
   };
 }
 
@@ -137,8 +208,8 @@ function drawGrid(grid, gridColor) {
   noFill();
   rectMode(CORNER);
 
-  for (let row = 0; row < grid.count; row++) {
-    for (let col = 0; col < grid.count; col++) {
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
       rect(
         grid.left + col * grid.pitch,
         grid.top + row * grid.pitch,
@@ -152,24 +223,71 @@ function drawGrid(grid, gridColor) {
   noStroke();
 }
 
-function drawLogo(logo, drawingState) {
-  const grid = gridMetrics(drawingState.gridSize);
+function drawLogo(logo, drawingState, grid, logoIndex) {
   const length = grid.cell;
   const center = cellCenter(logo.col, logo.row, grid);
   const x = center.x;
   const y = center.y;
-  const logoImage = renderedLogo(
-    drawingState.logoVariant || 'original',
-    drawingState.foreground,
-    length
-  );
 
   push();
   translate(x, y);
   rotate(radians(logo.rotation));
-  imageMode(CENTER);
-  image(logoImage, 0, 0, length, length);
+
+  if (drawingState.logoVariant === 'text') {
+    drawTextLogo(
+      drawingState,
+      logo.glyphIndex ?? logoIndex,
+      length
+    );
+  } else {
+    const logoImage = renderedLogo(
+      drawingState.logoVariant || 'original',
+      drawingState.foreground,
+      length
+    );
+    imageMode(CENTER);
+    image(logoImage, 0, 0, length, length);
+  }
+
   pop();
+}
+
+function drawTextLogo(drawingState, logoIndex, size) {
+  const content = drawingState.logoText || 'NOORDZUID';
+  const characters = Array.from(content.replace(/\s/g, ''));
+  const character = characters[logoIndex % max(1, characters.length)] || 'N';
+  const measureSize = 100;
+
+  textFont('Saans');
+  textStyle(NORMAL);
+  textSize(measureSize);
+  let metrics = drawingContext.measureText(character);
+  const hasExactBounds = Number.isFinite(metrics.actualBoundingBoxLeft) &&
+    Number.isFinite(metrics.actualBoundingBoxRight) &&
+    Number.isFinite(metrics.actualBoundingBoxAscent) &&
+    Number.isFinite(metrics.actualBoundingBoxDescent);
+  const measuredWidth = hasExactBounds
+    ? metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight
+    : textWidth(character);
+  const measuredHeight = hasExactBounds
+    ? metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
+    : textAscent() + textDescent();
+  const fittedSize = measureSize * (size * 0.96) / max(measuredWidth, measuredHeight, 1);
+
+  noStroke();
+  fill(drawingState.foreground);
+  textSize(fittedSize);
+
+  if (hasExactBounds) {
+    textAlign(LEFT, BASELINE);
+    metrics = drawingContext.measureText(character);
+    const x = (metrics.actualBoundingBoxLeft - metrics.actualBoundingBoxRight) / 2;
+    const y = (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+    text(character, x, y);
+  } else {
+    textAlign(CENTER, CENTER);
+    text(character, 0, 0);
+  }
 }
 
 function renderedLogo(variantId, foreground, size) {
@@ -210,10 +328,9 @@ function clearLogoRenderCache() {
   logoRenderCache = {};
 }
 
-function drawSelectionIndicator(logo, drawingState) {
-  const grid = gridMetrics(drawingState.gridSize);
-  const col = constrain(round(logo.col), 0, grid.count - 1);
-  const row = constrain(round(logo.row), 0, grid.count - 1);
+function drawSelectionIndicator(logo, grid) {
+  const col = constrain(round(logo.col), 0, grid.cols - 1);
+  const row = constrain(round(logo.row), 0, grid.rows - 1);
 
   push();
   rectMode(CORNER);
@@ -238,23 +355,65 @@ function mousePressed(event) {
   const interactionState = playing
     ? playbackState(millis() - animationStart)
     : state;
-  const grid = gridMetrics(interactionState.gridSize);
+  const interactionLogos = interactionState.logos.map((logo, index) => (
+    playing ? logo : movingLogo(index, logo)
+  ));
+  const grid = viewGridMetrics({ ...interactionState, logos: interactionLogos });
 
   if (
     canvasX < grid.left ||
-    canvasX > grid.left + grid.side ||
+    canvasX > grid.left + grid.gridWidth ||
     canvasY < grid.top ||
-    canvasY > grid.top + grid.side
+    canvasY > grid.top + grid.gridHeight
   ) return;
 
   const localX = canvasX - grid.left;
   const localY = canvasY - grid.top;
-  const col = constrain(floor(localX / grid.pitch), 0, grid.count - 1);
-  const row = constrain(floor(localY / grid.pitch), 0, grid.count - 1);
+  const col = constrain(floor(localX / grid.pitch), 0, grid.cols - 1);
+  const row = constrain(floor(localY / grid.pitch), 0, grid.rows - 1);
 
   if (localX - col * grid.pitch > grid.cell || localY - row * grid.pitch > grid.cell) return;
-  const clickedLogo = interactionState.logos.findIndex((logo, index) => {
-    const visibleLogo = playing ? logo : movingLogo(index, logo);
+
+  if (event.button === 2) {
+    if (playing || Object.keys(moves).length > 0) return false;
+
+    const logoIndex = state.logos.findIndex(logo => (
+      round(logo.col) === col && round(logo.row) === row
+    ));
+
+    if (logoIndex >= 0) {
+      if (state.mode === 'logo' && state.logos.length === 1) {
+        showStatus('Logo-modus gebruikt minimaal 1 logo');
+        return false;
+      }
+
+      state.logos.splice(logoIndex, 1);
+      selectedLogo = constrain(selectedLogo, 0, max(0, state.logos.length - 1));
+      showStatus('Logo verwijderd');
+    } else {
+      if (state.mode === 'logo' && state.logos.length === 2) {
+        showStatus('Logo-modus gebruikt maximaal 2 logo’s');
+        return false;
+      }
+
+      state.logos.push({
+        col,
+        row,
+        rotation: cellRotation(col, row)
+      });
+      selectedLogo = state.logos.length - 1;
+      showStatus('Logo toegevoegd');
+    }
+
+    moves = {};
+    if (state.mode === 'logo') {
+      document.getElementById('logo-amount').value = String(state.logos.length);
+    }
+    autoUpdateKeyframe();
+    return false;
+  }
+
+  const clickedLogo = interactionLogos.findIndex(visibleLogo => {
     const center = cellCenter(visibleLogo.col, visibleLogo.row, grid);
     return dist(canvasX, canvasY, center.x, center.y) <= grid.cell * 0.52;
   });
@@ -272,13 +431,18 @@ function mousePressed(event) {
     return;
   }
 
+  if (state.mode === 'fall') {
+    showStatus('Valmodus beweegt vanzelf');
+    return;
+  }
+
   rollLogo(selectedLogo, col, row);
 }
 
 function rollLogo(index, targetCol, targetRow) {
   const from = { ...state.logos[index] };
   const blocked = state.logos.filter((logo, logoIndex) => logoIndex !== index);
-  const path = buildRollPath(from, targetCol, targetRow, gridMetrics(state.gridSize).count, blocked);
+  const path = buildRollPath(from, targetCol, targetRow, gridMetrics(state.gridSize), blocked);
 
   if (!path.length) {
     showStatus('Geen vrije route naar deze cel');
@@ -296,6 +460,7 @@ function rollLogo(index, targetCol, targetRow) {
   };
 
   state.logos[index] = { ...to };
+  autoUpdateKeyframe();
   showStatus('Logo rolt naar de gekozen cel');
 }
 
@@ -313,7 +478,7 @@ function movingLogo(index, fallback) {
   return rollPathPose(move.path, raw, state.gridSize);
 }
 
-function buildRollPath(from, targetCol, targetRow, gridCount, blocked = []) {
+function buildRollPath(from, targetCol, targetRow, grid, blocked = [], phase = state.gridPhase || 0) {
   if (from.col === targetCol && from.row === targetRow) return [{ ...from }];
 
   const blockedCells = new Set(blocked.map(logo => `${logo.col},${logo.row}`));
@@ -342,8 +507,8 @@ function buildRollPath(from, targetCol, targetRow, gridCount, blocked = []) {
       const key = `${next.col},${next.row}`;
 
       if (
-        next.col < 0 || next.col >= gridCount ||
-        next.row < 0 || next.row >= gridCount ||
+        next.col < 0 || next.col >= grid.cols ||
+        next.row < 0 || next.row >= grid.rows ||
         blockedCells.has(key) || parents.has(key)
       ) continue;
 
@@ -367,50 +532,17 @@ function buildRollPath(from, targetCol, targetRow, gridCount, blocked = []) {
     current = parents.get(`${current.col},${current.row}`);
   }
 
-  let rotation = from.rotation;
+  let rotation = cellRotation(from.col, from.row, from.rotation, phase);
   return cells.map((cell, index) => {
     if (index > 0) {
-      const previous = cells[index - 1];
-      rotation += rollTurn(previous, cell, blocked);
+      rotation = cellRotation(cell.col, cell.row, rotation, phase);
     }
 
     return { ...cell, rotation };
   });
 }
 
-function rollTurn(from, to, otherLogos) {
-  const directionX = to.col - from.col;
-  const directionY = to.row - from.row;
-  const other = nearestLogo(from, otherLogos);
-
-  if (directionX !== 0) {
-    let pivotSide = 1;
-
-    if (other && other.row < from.row) pivotSide = -1;
-    if (other && other.row > from.row) pivotSide = 1;
-
-    return directionX * pivotSide * 90;
-  }
-
-  let pivotSide = -1;
-
-  if (other && other.col < from.col) pivotSide = -1;
-  if (other && other.col > from.col) pivotSide = 1;
-
-  return -directionY * pivotSide * 90;
-}
-
-function nearestLogo(from, logos) {
-  if (!logos.length) return null;
-
-  return logos.reduce((nearest, logo) => {
-    const distance = abs(logo.col - from.col) + abs(logo.row - from.row);
-    const nearestDistance = abs(nearest.col - from.col) + abs(nearest.row - from.row);
-    return distance < nearestDistance ? logo : nearest;
-  });
-}
-
-function rollPathPose(path, progress, gridSize) {
+function rollPathPose(path, progress, gridSize, easing = easingType) {
   const grid = gridMetrics(gridSize);
 
   if (path.length === 1) {
@@ -429,14 +561,14 @@ function rollPathPose(path, progress, gridSize) {
 
     if (distance <= travelled + weight) {
       const localProgress = constrain((distance - travelled) / weight, 0, 1);
-      const easedProgress = constrain(applyEasing(localProgress), 0, 1);
+      const easedProgress = constrain(applyEasing(localProgress, easing), 0, 1);
       return rollStepPose(path[i], path[i + 1], easedProgress, grid);
     }
 
     travelled += weight;
   }
 
-  return { ...to };
+  return { ...path[path.length - 1] };
 }
 
 function rollStepWeight(from, to) {
@@ -515,6 +647,7 @@ function canvasPointToLogo(point, rotation, grid) {
 
 function connectControls() {
   const logoVariantControl = document.getElementById('logo-variant');
+  const modeControl = document.getElementById('mode');
 
   LOGO_VARIANTS.forEach(variant => {
     const option = document.createElement('option');
@@ -526,60 +659,98 @@ function connectControls() {
   logoVariantControl.value = state.logoVariant;
   logoVariantControl.addEventListener('change', event => {
     state.logoVariant = event.target.value;
+    updateTextControls();
+    autoUpdateKeyframe();
+  });
+  document.getElementById('logo-text').addEventListener('input', event => {
+    state.logoText = event.target.value;
+    autoUpdateKeyframe();
+  });
+
+  modeControl.addEventListener('change', event => {
+    setMode(event.target.value);
+    autoUpdateKeyframe();
   });
 
   document.getElementById('grid-size').addEventListener('input', event => {
-    const oldCount = gridMetrics(state.gridSize).count;
+    const oldGrid = gridMetrics(state.gridSize);
     const newSize = constrain(Number(event.target.value) || 64, 32, 120);
-    const newCount = gridMetrics(newSize).count;
-    const shift = (newCount - oldCount) / 2;
+    const newGrid = gridMetrics(newSize);
+    const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
+    const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
+
+    state.gridPhase = ((state.gridPhase || 0) - shiftCol - shiftRow) % 2;
+    if (state.gridPhase < 0) state.gridPhase += 2;
 
     state.logos.forEach(logo => {
-      logo.col += shift;
-      logo.row += shift;
+      logo.col += shiftCol;
+      logo.row += shiftRow;
     });
 
     state.gridSize = newSize;
     event.target.value = newSize;
     moves = {};
+
+    autoUpdateKeyframe();
   });
 
   document.getElementById('show-grid').addEventListener('change', event => {
     state.showGrid = event.target.checked;
+    autoUpdateKeyframe();
   });
 
-  document.getElementById('apply-pattern').addEventListener('click', applyPattern);
-
-  document.getElementById('add-logo').addEventListener('click', addLogo);
-  document.getElementById('remove-logo').addEventListener('click', removeLogo);
-  document.getElementById('domino').addEventListener('click', () => startDomino(false));
-  document.getElementById('domino-loop').addEventListener('change', event => {
-    if (event.target.checked && !state.logos.length) {
-      event.target.checked = false;
-      showStatus('Voeg eerst een logo toe');
-      return;
-    }
-
-    dominoLoop = event.target.checked;
-    nextDominoAt = millis();
-    showStatus(dominoLoop ? 'Noise veld aan' : 'Noise veld uit');
+  document.getElementById('pattern').addEventListener('change', () => {
+    applyPattern();
+    autoUpdateKeyframe();
+  });
+  document.getElementById('noise-motion').addEventListener('change', event => {
+    state.noiseMotion = event.target.value;
+    nextNoiseMoveAt = 0;
+    autoUpdateKeyframe();
+  });
+  document.getElementById('noise-density').addEventListener('change', event => {
+    state.noiseDensity = event.target.value;
+    applyNoiseField();
+    autoUpdateKeyframe();
+  });
+  document.getElementById('logo-amount').addEventListener('change', () => {
+    applyLogoPreset();
+    autoUpdateKeyframe();
+  });
+  document.getElementById('logo-layout').addEventListener('change', () => {
+    applyLogoPreset();
+    autoUpdateKeyframe();
   });
 
   connectColors('foreground-colors', 'foreground');
   connectColors('background-colors', 'background');
   document.getElementById('add-keyframe').addEventListener('click', addKeyframe);
   document.getElementById('remove-keyframe').addEventListener('click', removeKeyframe);
-  document.getElementById('update-keyframe').addEventListener('click', updateKeyframe);
   document.getElementById('keyframe-list').addEventListener('change', loadKeyframe);
   document.getElementById('play').addEventListener('click', togglePlayback);
   document.getElementById('easing').addEventListener('change', event => {
     easingType = event.target.value;
+    autoUpdateKeyframe();
   });
   document.getElementById('stagger').addEventListener('input', event => {
     stagger = Number(event.target.value);
+    autoUpdateKeyframe();
   });
   document.getElementById('duration').addEventListener('change', event => {
-    transitionLength = max(100, Number(event.target.value) || 800);
+    const duration = max(100, Number(event.target.value) || DEFAULT_KEYFRAME_DURATION);
+    event.target.value = duration;
+    const animationInput = document.getElementById('animation-duration');
+    animationInput.value = min(duration, Number(animationInput.value) || DEFAULT_ANIMATION_DURATION);
+    autoUpdateKeyframe();
+  });
+  document.getElementById('animation-duration').addEventListener('change', event => {
+    const duration = max(100, Number(document.getElementById('duration').value) || DEFAULT_KEYFRAME_DURATION);
+    event.target.value = constrain(
+      Number(event.target.value) || DEFAULT_ANIMATION_DURATION,
+      100,
+      duration
+    );
+    autoUpdateKeyframe();
   });
   document.getElementById('canvas-width').addEventListener('change', resizeFromInputs);
   document.getElementById('canvas-height').addEventListener('change', resizeFromInputs);
@@ -588,67 +759,108 @@ function connectControls() {
 }
 
 function applyPattern() {
+  state.mode = 'pattern';
   const pattern = document.getElementById('pattern').value;
-  const cells = patternCells(pattern, gridMetrics(state.gridSize).count);
+  state.pattern = pattern;
+  const cells = patternCells(pattern, gridMetrics(state.gridSize));
 
-  state.logos = cells.map((cell, index) => ({
+  state.logos = cells.map(cell => ({
     col: cell.col,
     row: cell.row,
-    rotation: cell.rotation ?? (index % 2) * 90
+    rotation: cellRotation(cell.col, cell.row)
   }));
 
   selectedLogo = 0;
   moves = {};
-  keyframes = [cloneState()];
-  selectedKeyframe = 0;
-  refreshKeyframeList();
-  updateLogoCount();
-  showStatus('Patroon toegepast; keyframes opnieuw gestart');
+  showStatus('Patroon toegepast');
 }
 
-function startDomino(continuous = false) {
-  if (!state.logos.length) {
-    showStatus('Voeg eerst een logo toe');
-    return;
+function setMode(mode) {
+  state.mode = mode;
+  moves = {};
+  if (mode !== 'fall') {
+    fallBodies = [];
+    playbackFallActive = false;
+  }
+  updateModeControls();
+
+  if (mode === 'noise') {
+    applyNoiseField();
+  } else if (mode === 'logo') {
+    applyLogoPreset();
+  } else if (mode === 'pattern') {
+    applyPattern();
+  } else if (mode === 'fall') {
+    resetFallBodies();
+    playbackFallActive = false;
+    showStatus('De logo’s vallen binnen het canvas');
+  }
+}
+
+function updateModeControls() {
+  ['pattern', 'noise', 'logo'].forEach(mode => {
+    document.getElementById(`${mode}-controls`).hidden = state.mode !== mode;
+  });
+  updateTextControls();
+}
+
+function updateTextControls() {
+  document.getElementById('text-controls').hidden = state.logoVariant !== 'text';
+}
+
+function applyNoiseField() {
+  const grid = gridMetrics(state.gridSize);
+  const cells = [];
+
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
+      const value = noise(col * 0.31, row * 0.31, noiseIteration * 0.21);
+      cells.push({
+        col,
+        row,
+        score: value
+      });
+    }
   }
 
-  if (Object.keys(moves).length > 0) return;
+  const density = {
+    airy: 0.2,
+    balanced: 0.34,
+    full: 0.48
+  }[state.noiseDensity || 'balanced'];
+  const amount = max(2, round(cells.length * density));
+  state.logos = cells
+    .sort((a, b) => b.score - a.score)
+    .slice(0, amount)
+    .map(({ col, row }) => ({ col, row, rotation: cellRotation(col, row) }));
+  selectedLogo = 0;
+  noiseIteration++;
+  moves = {};
+  nextNoiseMoveAt = millis() + 250;
+  showStatus('Noise veld beweegt automatisch');
+}
 
-  const sourceIndex = continuous
-    ? floor(noise(dominoIteration * 0.19) * state.logos.length)
-    : selectedLogo;
-  const source = { ...state.logos[sourceIndex] };
-  const gridCount = gridMetrics(state.gridSize).count;
-  const positions = state.logos.map(logo => ({ ...logo }));
-  const occupied = new Set(positions.map(logo => `${logo.col},${logo.row}`));
-  const startingCells = new Set(occupied);
-  const order = positions
-    .map((logo, index) => ({
-      index,
-      distance: abs(logo.col - source.col) + abs(logo.row - source.row)
-    }))
-    .sort((a, b) => {
-      if (a.index === sourceIndex) return -1;
-      if (b.index === sourceIndex) return 1;
-      return a.distance - b.distance;
-    });
+function applyNoiseStep() {
+  if (state.mode !== 'noise' || !state.logos.length) return;
 
-  const startTime = millis();
-  const delay = 240 * stagger;
-  let moved = 0;
+  const grid = gridMetrics(state.gridSize);
+  const startingCells = new Set(state.logos.map(logo => `${logo.col},${logo.row}`));
+  const targets = new Set();
+  const settings = noiseMotionSettings();
+  const nextLogos = state.logos.map(logo => ({ ...logo }));
+  moves = {};
 
-  order.forEach(item => {
-    const logo = positions[item.index];
-    occupied.delete(`${logo.col},${logo.row}`);
-    let awayX = logo.col - source.col;
-    let awayY = logo.row - source.row;
-
-    if (awayX === 0 && awayY === 0) {
-      const direction = directionFromRotation(logo.rotation);
-      awayX = direction.col;
-      awayY = direction.row;
+  state.logos.forEach((logo, logoIndex) => {
+    if (random() > settings.amount) {
+      targets.add(`${logo.col},${logo.row}`);
+      return;
     }
 
+    const angle = noise(
+      logo.col * settings.spread,
+      logo.row * settings.spread,
+      noiseIteration * 0.11
+    ) * TWO_PI * 2;
     const candidates = [
       { col: logo.col + 1, row: logo.row },
       { col: logo.col - 1, row: logo.row },
@@ -656,215 +868,304 @@ function startDomino(continuous = false) {
       { col: logo.col, row: logo.row - 1 }
     ]
       .filter(cell => (
-        cell.col >= 0 && cell.col < gridCount &&
-        cell.row >= 0 && cell.row < gridCount &&
+        cell.col >= 0 && cell.col < grid.cols &&
+        cell.row >= 0 && cell.row < grid.rows &&
         !startingCells.has(`${cell.col},${cell.row}`) &&
-        !occupied.has(`${cell.col},${cell.row}`)
+        !targets.has(`${cell.col},${cell.row}`)
       ))
       .sort((a, b) => {
-        const moveAX = a.col - logo.col;
-        const moveAY = a.row - logo.row;
-        const moveBX = b.col - logo.col;
-        const moveBY = b.row - logo.row;
-        const fieldAngle = noise(
-          logo.col * 0.16,
-          logo.row * 0.16,
-          dominoIteration * 0.075
-        ) * TWO_PI * 2;
-        const directionX = continuous ? cos(fieldAngle) : awayX;
-        const directionY = continuous ? sin(fieldAngle) : awayY;
-        const scoreA = moveAX * directionX + moveAY * directionY;
-        const scoreB = moveBX * directionX + moveBY * directionY;
+        const scoreA = (a.col - logo.col) * cos(angle) + (a.row - logo.row) * sin(angle);
+        const scoreB = (b.col - logo.col) * cos(angle) + (b.row - logo.row) * sin(angle);
         return scoreB - scoreA;
       });
 
     if (!candidates.length) {
-      occupied.add(`${logo.col},${logo.row}`);
+      targets.add(`${logo.col},${logo.row}`);
       return;
     }
 
     const target = candidates[0];
-    const blocked = positions.filter((other, index) => index !== item.index);
-    const path = buildRollPath(
-      logo,
-      target.col,
-      target.row,
-      gridCount,
-      blocked
-    );
-
-    if (!path.length) {
-      occupied.add(`${logo.col},${logo.row}`);
-      return;
-    }
+    targets.add(`${target.col},${target.row}`);
+    const path = buildRollPath(logo, target.col, target.row, grid, state.logos.filter(other => other !== logo));
+    if (!path.length) return;
 
     const endpoint = path[path.length - 1];
-    moves[item.index] = {
+    endpoint.rotation = cellRotation(endpoint.col, endpoint.row, logo.rotation);
+    nextLogos[logoIndex] = { ...endpoint };
+    moves[logoIndex] = {
       path,
-      start: startTime + moved * delay,
-      duration: 420
+      start: millis(),
+      duration: settings.duration
     };
-    positions[item.index] = { ...endpoint };
-    state.logos[item.index] = { ...endpoint };
-    occupied.add(`${endpoint.col},${endpoint.row}`);
-    moved++;
   });
 
-  dominoIteration++;
-  nextDominoAt = millis() + (moved ? 80 : 300);
+  state.logos = nextLogos;
+  noiseIteration++;
+  nextNoiseMoveAt = millis() + settings.duration + settings.pause;
+}
 
-  if (!continuous) {
-    showStatus(moved ? 'Domino gestart' : 'Geen vrije cellen voor Domino');
+function noiseMotionSettings() {
+  return {
+    calm: { duration: 760, pause: 260, amount: 0.24, spread: 0.12 },
+    playful: { duration: 480, pause: 100, amount: 0.48, spread: 0.22 },
+    wild: { duration: 280, pause: 30, amount: 0.76, spread: 0.38 }
+  }[state.noiseMotion || 'playful'];
+}
+
+function updateNoiseMotion() {
+  if (
+    state.mode !== 'noise' || playing || exporting || exportingPNG ||
+    millis() < nextNoiseMoveAt || Object.keys(moves).length > 0
+  ) return;
+
+  applyNoiseStep();
+}
+
+function resetFallBodies(sourceState = state) {
+  const grid = gridMetrics(sourceState.gridSize);
+
+  fallBodies = sourceState.logos.map((logo, index) => {
+    const center = cellCenter(logo.col, logo.row, grid);
+    return {
+      x: center.x,
+      y: center.y,
+      vx: sin((index + 1) * 2.17) * 18,
+      vy: 0,
+      rotation: logo.rotation,
+      angularVelocity: sin((index + 1) * 1.37) * 4
+    };
+  });
+  lastFallUpdate = millis();
+}
+
+function updateFallMotion() {
+  if (state.mode !== 'fall' || playing || exporting || exportingPNG) return;
+
+  if (fallBodies.length !== state.logos.length) resetFallBodies();
+  if (!fallBodies.length) return;
+
+  state.logos = stepFallBodies(state);
+}
+
+function playbackFallState(drawingState) {
+  if (!playbackFallActive || fallBodies.length !== drawingState.logos.length) {
+    resetFallBodies(drawingState);
+    playbackFallActive = true;
+  }
+
+  return {
+    ...drawingState,
+    logos: stepFallBodies(drawingState)
+  };
+}
+
+function stepFallBodies(sourceState) {
+  if (!fallBodies.length) return [];
+
+  const now = millis();
+  const elapsed = constrain((now - lastFallUpdate) / 1000, 0, 0.04);
+  lastFallUpdate = now;
+  const grid = gridMetrics(sourceState.gridSize);
+  const collisionPadding = 3;
+  const steps = 4;
+  const dt = elapsed / steps;
+
+  for (let step = 0; step < steps; step++) {
+    fallBodies.forEach(body => {
+      body.vy += 980 * dt;
+      body.x += body.vx * dt;
+      body.y += body.vy * dt;
+      body.rotation += body.angularVelocity * dt;
+
+      const angle = radians(body.rotation);
+      const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
+
+      if (body.x - extent < 0) {
+        body.x = extent;
+        body.vx = abs(body.vx) * 0.42;
+        body.angularVelocity += 0.8;
+      } else if (body.x + extent > width) {
+        body.x = width - extent;
+        body.vx = -abs(body.vx) * 0.42;
+        body.angularVelocity -= 0.8;
+      }
+
+      if (body.y - extent < 0) {
+        body.y = extent;
+        body.vy = max(0, body.vy);
+      } else if (body.y + extent > height) {
+        body.y = height - extent;
+        body.vy = 0;
+        body.vx *= 0.9;
+        body.angularVelocity *= 0.7;
+      }
+
+      body.angularVelocity = constrain(body.angularVelocity, -10, 10);
+    });
+
+    resolveFallCollisions(grid.cell * 0.46, collisionPadding);
+    fallBodies.forEach(body => {
+      const angle = radians(body.rotation);
+      const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
+      body.x = constrain(body.x, extent, width - extent);
+      body.y = constrain(body.y, extent, height - extent);
+    });
+  }
+
+  return fallBodies.map(body => canvasPointToLogo(
+    { x: body.x, y: body.y },
+    body.rotation,
+    grid
+  ));
+}
+
+function resolveFallCollisions(radius, padding) {
+  for (let firstIndex = 0; firstIndex < fallBodies.length; firstIndex++) {
+    for (let secondIndex = firstIndex + 1; secondIndex < fallBodies.length; secondIndex++) {
+      const first = fallBodies[firstIndex];
+      const second = fallBodies[secondIndex];
+      const dx = second.x - first.x;
+      const dy = second.y - first.y;
+      const distance = max(0.001, sqrt(dx * dx + dy * dy));
+      const overlap = radius * 2 + padding - distance;
+      if (overlap <= 0) continue;
+
+      const nx = dx / distance;
+      const ny = dy / distance;
+      first.x -= nx * overlap * 0.5;
+      first.y -= ny * overlap * 0.5;
+      second.x += nx * overlap * 0.5;
+      second.y += ny * overlap * 0.5;
+
+      const relativeVelocity = (second.vx - first.vx) * nx + (second.vy - first.vy) * ny;
+      if (relativeVelocity >= 0) continue;
+
+      const impulse = -relativeVelocity * 0.5;
+      first.vx -= nx * impulse;
+      first.vy = max(0, first.vy - ny * impulse);
+      second.vx += nx * impulse;
+      second.vy = max(0, second.vy + ny * impulse);
+      const spin = nx * impulse * 0.018;
+      first.angularVelocity = constrain(first.angularVelocity - spin, -10, 10);
+      second.angularVelocity = constrain(second.angularVelocity + spin, -10, 10);
+    }
   }
 }
 
-function updateDominoLoop() {
-  if (
-    !dominoLoop || !state.logos.length || playing || exporting || exportingPNG ||
-    Object.keys(moves).length > 0 || millis() < nextDominoAt
-  ) return;
+function applyLogoPreset() {
+  const amount = Number(document.getElementById('logo-amount').value || 2);
+  const layout = document.getElementById('logo-layout').value || 'horizontal';
+  const grid = gridMetrics(state.gridSize);
+  const centerCol = floor(grid.cols / 2);
+  const centerRow = floor(grid.rows / 2);
 
-  startDomino(true);
+  state.mode = 'logo';
+  state.logoLayout = layout;
+  state.logos = amount === 1
+    ? [{ col: centerCol, row: centerRow, rotation: cellRotation(centerCol, centerRow) }]
+    : layout === 'vertical'
+      ? [
+          { col: centerCol, row: centerRow - 1, rotation: cellRotation(centerCol, centerRow - 1) },
+          { col: centerCol, row: centerRow, rotation: cellRotation(centerCol, centerRow) }
+        ]
+      : [
+          { col: centerCol - 1, row: centerRow, rotation: cellRotation(centerCol - 1, centerRow) },
+          { col: centerCol, row: centerRow, rotation: cellRotation(centerCol, centerRow) }
+        ];
+
+  selectedLogo = 0;
+  moves = {};
+  showStatus('Logo-opstelling toegepast');
 }
 
-function directionFromRotation(rotation) {
-  const quarter = ((round(rotation / 90) % 4) + 4) % 4;
-  return [
-    { col: 1, row: 0 },
-    { col: 0, row: 1 },
-    { col: -1, row: 0 },
-    { col: 0, row: -1 }
-  ][quarter];
-}
-
-function patternCells(pattern, size) {
+function patternCells(pattern, grid) {
   const cells = [];
-  const center = floor(size / 2);
-  const first = 1;
-  const last = size - 2;
+  const centerCol = floor(grid.cols / 2);
+  const centerRow = floor(grid.rows / 2);
+  const lastCol = grid.cols - 1;
+  const lastRow = grid.rows - 1;
 
   if (pattern === 'empty') return cells;
 
   if (pattern === 'center') {
     return [
-      { col: center, row: center, rotation: 0 },
-      { col: center + 1, row: center, rotation: 90 }
+      { col: centerCol, row: centerRow },
+      { col: centerCol + 1, row: centerRow }
     ];
   }
 
   if (pattern === 'line') {
-    for (let col = first; col <= last; col++) {
+    for (let col = 0; col <= lastCol; col++) {
       cells.push({
         col,
-        row: center,
-        rotation: (col - first) % 2 === 0 ? 0 : 90
+        row: centerRow
       });
     }
     return cells;
   }
 
   if (pattern === 'cross') {
-    for (let position = first; position <= last; position++) {
-      cells.push({ col: position, row: center, rotation: position % 2 * 90 });
-      if (position !== center) {
-        cells.push({ col: center, row: position, rotation: position % 2 * 90 });
-      }
+    for (let col = 0; col <= lastCol; col++) {
+      cells.push({ col, row: centerRow });
+    }
+    for (let row = 0; row <= lastRow; row++) {
+      if (row !== centerRow) cells.push({ col: centerCol, row });
     }
     return cells;
   }
 
   if (pattern === 'diagonal') {
-    for (let position = first; position <= last; position++) {
-      cells.push({ col: position, row: position, rotation: position % 2 * 90 });
-      const mirror = size - 1 - position;
-      if (mirror !== position) {
-        cells.push({ col: mirror, row: position, rotation: position % 2 === 0 ? 90 : 0 });
+    const length = min(grid.cols, grid.rows);
+    const colOffset = floor((grid.cols - length) / 2);
+    const rowOffset = floor((grid.rows - length) / 2);
+    for (let position = 0; position < length; position++) {
+      const col = colOffset + position;
+      const row = rowOffset + position;
+      cells.push({ col, row });
+      const mirror = colOffset + length - 1 - position;
+      if (mirror !== col) {
+        cells.push({ col: mirror, row });
       }
     }
     return cells;
   }
 
   if (pattern === 'ring') {
-    for (let col = first; col <= last; col++) {
-      cells.push({ col, row: first, rotation: col % 2 * 90 });
-      if (last !== first) cells.push({ col, row: last, rotation: col % 2 * 90 });
+    for (let col = 0; col <= lastCol; col++) {
+      cells.push({ col, row: 0 });
+      if (lastRow > 0) cells.push({ col, row: lastRow });
     }
-    for (let row = first + 1; row < last; row++) {
-      cells.push({ col: first, row, rotation: row % 2 * 90 });
-      cells.push({ col: last, row, rotation: row % 2 * 90 });
+    for (let row = 1; row < lastRow; row++) {
+      cells.push({ col: 0, row });
+      cells.push({ col: lastCol, row });
     }
     return cells;
   }
 
   if (pattern === 'steps') {
-    for (let position = first; position <= last; position++) {
-      cells.push({ col: position, row: position, rotation: position % 2 * 90 });
-      if (position < last) {
-        cells.push({ col: position + 1, row: position, rotation: position % 2 === 0 ? 90 : 0 });
+    const length = min(grid.cols, grid.rows);
+    const colOffset = floor((grid.cols - length) / 2);
+    const rowOffset = floor((grid.rows - length) / 2);
+    for (let position = 0; position < length; position++) {
+      const col = colOffset + position;
+      const row = rowOffset + position;
+      cells.push({ col, row });
+      if (position < length - 1) {
+        cells.push({ col: col + 1, row });
       }
     }
     return cells;
   }
 
-  for (let row = first; row <= last; row++) {
-    for (let col = first; col <= last; col++) {
+  for (let row = 0; row <= lastRow; row++) {
+    for (let col = 0; col <= lastCol; col++) {
       if ((row + col) % 2 === 0) {
-        cells.push({ col, row, rotation: cells.length % 2 * 90 });
+        cells.push({ col, row });
       }
     }
   }
 
   return cells;
-}
-
-function addLogo() {
-  const occupied = new Set(state.logos.map(logo => `${logo.col},${logo.row}`));
-  const gridCount = gridMetrics(state.gridSize).count;
-  let freeCell = null;
-
-  for (let row = 1; row < gridCount - 1 && !freeCell; row++) {
-    for (let col = 1; col < gridCount - 1; col++) {
-      if (!occupied.has(`${col},${row}`)) {
-        freeCell = { col, row };
-        break;
-      }
-    }
-  }
-
-  if (!freeCell) {
-    showStatus('Het grid is vol; maak het grid eerst groter');
-    return;
-  }
-
-  const logo = {
-    ...freeCell,
-    rotation: state.logos.length % 2 === 0 ? 0 : 90
-  };
-
-  state.logos.push(logo);
-  keyframes.forEach(keyframe => keyframe.logos.push({ ...logo }));
-  selectedLogo = state.logos.length - 1;
-  moves = {};
-  updateLogoCount();
-  showStatus(`Logo ${state.logos.length} toegevoegd`);
-}
-
-function removeLogo() {
-  if (!state.logos.length) {
-    showStatus('Er zijn geen logo’s om te verwijderen');
-    return;
-  }
-
-  state.logos.splice(selectedLogo, 1);
-  keyframes.forEach(keyframe => keyframe.logos.splice(selectedLogo, 1));
-  selectedLogo = min(selectedLogo, state.logos.length - 1);
-  moves = {};
-  updateLogoCount();
-  showStatus('Logo verwijderd');
-}
-
-function updateLogoCount() {
-  document.getElementById('logo-count').textContent = state.logos.length;
 }
 
 function connectColors(containerId, property) {
@@ -874,6 +1175,7 @@ function connectColors(containerId, property) {
     button.addEventListener('click', () => {
       state[property] = button.dataset.color;
       setActiveColor(container, button.dataset.color);
+      autoUpdateKeyframe();
     });
   });
 }
@@ -887,21 +1189,48 @@ function setActiveColor(container, colorValue) {
 function cloneState(source = state) {
   return {
     ...source,
-    logos: source.logos.map(logo => ({ ...logo }))
+    logos: source.logos.map(logo => ({
+      ...logo,
+      rotation: source.mode === 'fall'
+        ? logo.rotation
+        : cellRotation(logo.col, logo.row, logo.rotation, source.gridPhase || 0)
+    }))
   };
 }
 
 function addKeyframe() {
-  keyframes.push(cloneState());
+  keyframes.push({ ...cloneState(), ...timingFromControls() });
   selectedKeyframe = keyframes.length - 1;
   refreshKeyframeList();
   showStatus('Keyframe toegevoegd');
 }
 
-function updateKeyframe() {
+function autoUpdateKeyframe() {
   if (!keyframes[selectedKeyframe]) return;
-  keyframes[selectedKeyframe] = cloneState();
-  showStatus(`Keyframe ${selectedKeyframe + 1} aangepast`);
+  keyframes[selectedKeyframe] = {
+    ...cloneState(),
+    ...timingFromControls()
+  };
+  refreshKeyframeList();
+}
+
+function timingFromControls() {
+  const duration = max(
+    100,
+    Number(document.getElementById('duration').value) || DEFAULT_KEYFRAME_DURATION
+  );
+  const animationDuration = constrain(
+    Number(document.getElementById('animation-duration').value) || DEFAULT_ANIMATION_DURATION,
+    100,
+    duration
+  );
+
+  return {
+    duration,
+    animationDuration,
+    easing: document.getElementById('easing').value || easingType,
+    stagger: Number(document.getElementById('stagger').value) || 0
+  };
 }
 
 function removeKeyframe() {
@@ -920,10 +1249,19 @@ function refreshKeyframeList() {
   keyframes.forEach((keyframe, index) => {
     const option = document.createElement('option');
     option.value = index;
-    option.textContent = `Keyframe ${index + 1}`;
+    option.textContent = `Keyframe ${index + 1} · ${modeLabel(keyframe.mode)} · ${keyframeDuration(index)} ms`;
     option.selected = index === selectedKeyframe;
     list.appendChild(option);
   });
+}
+
+function modeLabel(mode) {
+  return {
+    pattern: 'Patroon',
+    noise: 'Noise',
+    logo: 'Logo',
+    fall: 'Val'
+  }[mode] || 'Patroon';
 }
 
 function loadKeyframe() {
@@ -931,14 +1269,30 @@ function loadKeyframe() {
   if (!keyframes[selectedKeyframe]) return;
   state = cloneState(keyframes[selectedKeyframe]);
   moves = {};
+  fallBodies = [];
+  playbackFallActive = false;
   syncControls();
 }
 
 function syncControls() {
+  document.getElementById('mode').value = state.mode || 'pattern';
+  document.getElementById('pattern').value = state.pattern || 'center';
   document.getElementById('grid-size').value = state.gridSize;
   document.getElementById('show-grid').checked = state.showGrid;
   document.getElementById('logo-variant').value = state.logoVariant || 'original';
-  updateLogoCount();
+  document.getElementById('logo-text').value = state.logoText || 'NOORDZUID';
+  document.getElementById('logo-layout').value = state.logoLayout || 'horizontal';
+  document.getElementById('logo-amount').value = String(constrain(state.logos.length, 1, 2));
+  document.getElementById('noise-motion').value = state.noiseMotion || 'playful';
+  document.getElementById('noise-density').value = state.noiseDensity || 'balanced';
+  document.getElementById('duration').value = keyframeDuration(selectedKeyframe);
+  document.getElementById('animation-duration').value = keyframeAnimationDuration(selectedKeyframe);
+  easingType = keyframes[selectedKeyframe]?.easing || easingType;
+  stagger = Number(keyframes[selectedKeyframe]?.stagger ?? stagger);
+  document.getElementById('easing').value = easingType;
+  document.getElementById('stagger').value = stagger;
+  updateModeControls();
+  refreshKeyframeList();
   setActiveColor(document.getElementById('foreground-colors'), state.foreground);
   setActiveColor(document.getElementById('background-colors'), state.background);
 }
@@ -955,29 +1309,70 @@ function togglePlayback() {
 
 function stopPlayback() {
   playing = false;
+  fallBodies = [];
+  playbackFallActive = false;
   document.getElementById('play').textContent = 'Play';
 }
 
-function animationDuration() {
-  let duration = 0;
-
-  for (let i = 0; i < keyframes.length - 1; i++) {
-    duration += keyframeTransitionDuration(i);
-  }
-
-  return duration;
+function keyframeDuration(index) {
+  return max(100, Number(keyframes[index]?.duration) || DEFAULT_KEYFRAME_DURATION);
 }
 
-function keyframeTransitionDuration(index) {
-  return transitionPlan(index).duration;
+function keyframeAnimationDuration(index) {
+  return constrain(
+    Number(keyframes[index]?.animationDuration) || DEFAULT_ANIMATION_DURATION,
+    100,
+    keyframeDuration(index)
+  );
+}
+
+function animationDuration() {
+  return keyframes
+    .slice(0, -1)
+    .reduce((total, keyframe, index) => total + keyframeDuration(index), 0);
 }
 
 function transitionPlan(index) {
   const from = keyframes[index];
   const to = keyframes[index + 1];
-  const gridCount = gridMetrics(from.gridSize).count;
+  const frameLength = keyframeDuration(index);
+  const animationLength = keyframeAnimationDuration(index);
+  const transitionStagger = constrain(Number(from.stagger ?? stagger), 0, 1);
+  const fromGrid = gridMetrics(from.gridSize);
+  const toGrid = gridMetrics(to.gridSize);
+  const transitionGrid = {
+    cols: max(fromGrid.cols, toGrid.cols),
+    rows: max(fromGrid.rows, toGrid.rows)
+  };
   const positions = from.logos.map(logo => ({ ...logo }));
-  const remaining = positions.map((logo, logoIndex) => logoIndex);
+  const pairCandidates = [];
+  const usedSources = new Set();
+  const usedTargets = new Set();
+
+  from.logos.forEach((source, sourceIndex) => {
+    to.logos.forEach((target, targetIndex) => {
+      pairCandidates.push({
+        sourceIndex,
+        targetIndex,
+        distance: abs(source.col - target.col) + abs(source.row - target.row)
+      });
+    });
+  });
+
+  pairCandidates.sort((a, b) => a.distance - b.distance);
+  const remaining = [];
+
+  pairCandidates.forEach(pair => {
+    if (
+      usedSources.has(pair.sourceIndex) ||
+      usedTargets.has(pair.targetIndex)
+    ) return;
+
+    usedSources.add(pair.sourceIndex);
+    usedTargets.add(pair.targetIndex);
+    remaining.push(pair);
+  });
+
   const items = [];
   const reservedCells = [];
 
@@ -985,22 +1380,28 @@ function transitionPlan(index) {
     let planned = false;
 
     for (let remainingIndex = 0; remainingIndex < remaining.length; remainingIndex++) {
-      const logoIndex = remaining[remainingIndex];
-      const target = to.logos[logoIndex];
+      const pair = remaining[remainingIndex];
+      const logoIndex = pair.sourceIndex;
+      const target = to.logos[pair.targetIndex];
       const blocked = positions
-        .filter((logo, index) => index !== logoIndex)
-        .concat(stagger < 1 ? reservedCells : []);
+        .filter((logo, positionIndex) => logo && positionIndex !== logoIndex)
+        .concat(reservedCells);
       const path = buildRollPath(
         positions[logoIndex],
         target.col,
         target.row,
-        gridCount,
-        blocked
+        transitionGrid,
+        blocked,
+        from.gridPhase || 0
       );
 
       if (!path.length) continue;
-
-      items.push({ logoIndex, path, weight: pathWeight(path) });
+      items.push({
+        logoIndex,
+        targetIndex: pair.targetIndex,
+        path,
+        weight: pathWeight(path)
+      });
       reservedCells.push(...path);
       positions[logoIndex] = { ...target };
       remaining.splice(remainingIndex, 1);
@@ -1008,15 +1409,43 @@ function transitionPlan(index) {
       break;
     }
 
-    if (!planned) return { items: [], duration: transitionLength };
+    // Pairs without a collision-free route use separate exit and enter rolls.
+    if (!planned) break;
   }
 
+  const plannedSources = new Set(items.map(item => item.logoIndex));
+  const plannedTargets = new Set(items.map(item => item.targetIndex));
+
+  from.logos.forEach((logo, logoIndex) => {
+    if (plannedSources.has(logoIndex)) return;
+    const path = exitRollPath(logo, transitionGrid, from.gridPhase || 0);
+    items.push({
+      kind: 'exit',
+      logoIndex,
+      path,
+      weight: pathWeight(path)
+    });
+  });
+
+  to.logos.forEach((logo, targetIndex) => {
+    if (plannedTargets.has(targetIndex)) return;
+    const path = enterRollPath(logo, transitionGrid, to.gridPhase || 0);
+    items.push({
+      kind: 'enter',
+      targetIndex,
+      path,
+      weight: pathWeight(path)
+    });
+  });
+
   const movingItems = items.filter(item => item.weight > 0);
-  const slot = movingItems.length > 0
-    ? transitionLength / movingItems.length
-    : transitionLength;
-  const delay = slot * stagger;
-  const movementDuration = transitionLength - delay * max(0, movingItems.length - 1);
+  const staggerWindow = movingItems.length > 1 && transitionStagger > 0.001
+    ? animationLength * 0.45 * transitionStagger
+    : 0;
+  const delay = movingItems.length > 1
+    ? staggerWindow / (movingItems.length - 1)
+    : 0;
+  const movementDuration = animationLength - staggerWindow;
   let movingIndex = 0;
 
   items.forEach(item => {
@@ -1031,64 +1460,169 @@ function transitionPlan(index) {
     movingIndex++;
   });
 
-  return { items, duration: transitionLength };
+  return { items, duration: frameLength, animationDuration: animationLength };
+}
+
+function exitRollPath(logo, grid, phase = state.gridPhase || 0) {
+  const direction = outwardDirection(logo, grid);
+  const path = [{ ...logo }];
+  let current = { ...logo };
+
+  while (
+    current.col >= 0 && current.col < grid.cols &&
+    current.row >= 0 && current.row < grid.rows
+  ) {
+    const target = {
+      col: current.col + direction.col,
+      row: current.row + direction.row
+    };
+    target.rotation = cellRotation(target.col, target.row, current.rotation, phase);
+    path.push(target);
+    current = target;
+  }
+
+  return path;
+}
+
+function enterRollPath(logo, grid, phase = state.gridPhase || 0) {
+  const path = exitRollPath(logo, grid, phase)
+    .map(point => ({ col: point.col, row: point.row, rotation: 0 }))
+    .reverse();
+
+  path[path.length - 1].rotation = logo.rotation;
+
+  for (let index = path.length - 2; index >= 0; index--) {
+    path[index].rotation = cellRotation(
+      path[index].col,
+      path[index].row,
+      path[index + 1].rotation,
+      phase
+    );
+  }
+
+  return path;
+}
+
+function outwardDirection(logo, grid) {
+  const horizontalDistance = logo.col - (grid.cols - 1) / 2;
+  const verticalDistance = logo.row - (grid.rows - 1) / 2;
+
+  if (abs(horizontalDistance) >= abs(verticalDistance) && horizontalDistance !== 0) {
+    return { col: Math.sign(horizontalDistance), row: 0 };
+  }
+
+  if (verticalDistance !== 0) {
+    return { col: 0, row: Math.sign(verticalDistance) };
+  }
+
+  const quarter = ((round(logo.rotation / 90) % 4) + 4) % 4;
+  return [
+    { col: 1, row: 0 },
+    { col: 0, row: 1 },
+    { col: -1, row: 0 },
+    { col: 0, row: -1 }
+  ][quarter];
 }
 
 function playbackState(elapsed) {
   if (keyframes.length < 2) return state;
 
+  const safeElapsed = max(0, elapsed);
   let segment = 0;
   let segmentStart = 0;
 
-  while (segment < keyframes.length - 2) {
-    const duration = keyframeTransitionDuration(segment);
-    if (elapsed <= segmentStart + duration) break;
-    segmentStart += duration;
+  while (
+    segment < keyframes.length - 2 &&
+    safeElapsed >= segmentStart + keyframeDuration(segment)
+  ) {
+    segmentStart += keyframeDuration(segment);
     segment++;
   }
 
   const plan = transitionPlan(segment);
   const duration = plan.duration;
   const segmentElapsed = elapsed - segmentStart;
-  const raw = constrain(segmentElapsed / duration, 0, 1);
-  const eased = applyEasing(raw);
-  const colorProgress = constrain(eased, 0, 1);
   const from = keyframes[segment];
   const to = keyframes[segment + 1];
+
+  // Leaving physics is a deliberate hard cut: never rebuild fallen items onto a grid.
+  if (from.mode === 'fall' && to.mode !== 'fall') {
+    return segmentElapsed < plan.animationDuration
+      ? cloneState(from)
+      : cloneState(to);
+  }
+
+  const raw = constrain(segmentElapsed / plan.animationDuration, 0, 1);
+  const eased = applyEasing(raw, from.easing || easingType);
+  const colorProgress = constrain(eased, 0, 1);
   const logos = from.logos.map(logo => ({ ...logo }));
+  const enteringLogos = [];
+  const sourceFocusLogos = [];
+  const targetFocusLogos = [];
 
   plan.items.forEach(item => {
-    const target = to.logos[item.logoIndex];
+    const progress = item.duration > 0
+      ? constrain((segmentElapsed - item.start) / item.duration, 0, 1)
+      : 1;
+    const pose = rollPathPose(item.path, progress, from.gridSize, from.easing || easingType);
 
-    if (segmentElapsed >= item.start + item.duration) {
-      logos[item.logoIndex] = { ...target };
-    } else if (segmentElapsed >= item.start && item.duration > 0) {
-      const progress = constrain(
-        (segmentElapsed - item.start) / item.duration,
-        0,
-        1
-      );
-      logos[item.logoIndex] = rollPathPose(
-        item.path,
-        progress,
-        from.gridSize
-      );
+    if (item.kind === 'enter') {
+      const enteringLogo = {
+        ...pose,
+        glyphIndex: item.targetIndex
+      };
+      enteringLogos.push(enteringLogo);
+      targetFocusLogos.push(enteringLogo);
+      return;
     }
+
+    if (item.kind === 'exit') {
+      const exitingLogo = { ...pose };
+      logos[item.logoIndex] = exitingLogo;
+      sourceFocusLogos.push(exitingLogo);
+      return;
+    }
+
+    const target = to.logos[item.targetIndex];
+    logos[item.logoIndex] = progress >= 1 ? { ...target } : pose;
+    sourceFocusLogos.push(logos[item.logoIndex]);
+    targetFocusLogos.push(logos[item.logoIndex]);
   });
 
+  if (raw >= 1) return cloneState(to);
+
+  logos.push(...enteringLogos);
+
+  const focusLogos = to.mode === 'logo'
+    ? targetFocusLogos
+    : from.mode === 'logo'
+      ? sourceFocusLogos
+      : logos;
+
   return {
-    gridSize: from.gridSize,
-    showGrid: from.showGrid,
+    mode: raw < 0.5 ? (from.mode || 'pattern') : (to.mode || 'pattern'),
+    pattern: raw < 0.5 ? (from.pattern || 'center') : (to.pattern || 'center'),
+    viewFocus: lerp(from.mode === 'logo' ? 1 : 0, to.mode === 'logo' ? 1 : 0, colorProgress),
+    gridSize: lerp(from.gridSize, to.gridSize, colorProgress),
+    gridPhase: raw < 0.5 ? (from.gridPhase || 0) : (to.gridPhase || 0),
+    showGrid: raw < 0.5 ? from.showGrid : to.showGrid,
+    logoLayout: raw < 0.5
+      ? (from.logoLayout || 'horizontal')
+      : (to.logoLayout || 'horizontal'),
     logoVariant: raw < 0.5
       ? (from.logoVariant || 'original')
       : (to.logoVariant || 'original'),
+    logoText: raw < 0.5
+      ? (from.logoText || 'NOORDZUID')
+      : (to.logoText || 'NOORDZUID'),
     foreground: lerpColor(color(from.foreground), color(to.foreground), colorProgress).toString('#rrggbb'),
     background: lerpColor(color(from.background), color(to.background), colorProgress).toString('#rrggbb'),
+    focusLogos,
     logos
   };
 }
 
-function applyEasing(amount) {
+function applyEasing(amount, type = easingType) {
   const t = constrain(amount, 0, 1);
   const c1 = 1.70158;
   const c2 = c1 * 1.525;
@@ -1096,7 +1630,7 @@ function applyEasing(amount) {
   const c4 = (2 * Math.PI) / 3;
   const c5 = (2 * Math.PI) / 4.5;
 
-  switch (easingType) {
+  switch (type) {
     case 'linear': return t;
     case 'easeInQuad': return t * t;
     case 'easeOutQuad': return 1 - (1 - t) * (1 - t);
@@ -1169,25 +1703,33 @@ function bounceOut(t) {
 function resizeFromInputs() {
   const newWidth = constrain(Number(document.getElementById('canvas-width').value) || 600, 200, 1920);
   const newHeight = constrain(Number(document.getElementById('canvas-height').value) || 600, 200, 1920);
-  const oldCount = gridMetrics(state.gridSize).count;
+  const oldGrid = gridMetrics(state.gridSize);
   resizeCanvas(newWidth, newHeight);
   fitCanvasPreview();
-  const newCount = gridMetrics(state.gridSize).count;
-  const shift = (newCount - oldCount) / 2;
+  const newGrid = gridMetrics(state.gridSize);
+  const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
+  const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
+
+  state.gridPhase = ((state.gridPhase || 0) - shiftCol - shiftRow) % 2;
+  if (state.gridPhase < 0) state.gridPhase += 2;
 
   state.logos.forEach(logo => {
-    logo.col += shift;
-    logo.row += shift;
+    logo.col += shiftCol;
+    logo.row += shiftRow;
   });
 
   moves = {};
+  if (state.mode === 'pattern') applyPattern();
+  if (state.mode === 'noise') applyNoiseField();
+  autoUpdateKeyframe();
 }
 
 function fitCanvasPreview() {
   if (!canvasElement || !canvasContainer) return;
 
-  const availableWidth = canvasContainer.clientWidth;
-  const availableHeight = canvasContainer.clientHeight;
+  const bounds = canvasContainer.getBoundingClientRect();
+  const availableWidth = bounds.width;
+  const availableHeight = bounds.height;
 
   if (!availableWidth || !availableHeight) return;
 
@@ -1204,8 +1746,8 @@ function fitCanvasPreview() {
     clearLogoRenderCache();
   }
 
-  canvasElement.style.width = `${floor(width * scale)}px`;
-  canvasElement.style.height = `${floor(height * scale)}px`;
+  canvasElement.style.width = `${width * scale}px`;
+  canvasElement.style.height = `${height * scale}px`;
 }
 
 function windowResized() {
