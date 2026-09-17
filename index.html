@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Noordzuid motion tool</title>
+    <title>Noordzuid animatie tool</title>
     <link rel="stylesheet" href="style.css" />
     <script src="libraries/p5.min.js"></script>
   </head>
@@ -17,40 +17,26 @@
           <div class="control">
             <label for="mode">Modus</label>
             <select id="mode">
+              <option value="logo" selected>Logo</option>
               <option value="pattern">Patroon</option>
               <option value="noise">Noise veld</option>
-              <option value="logo">Logo</option>
               <option value="fall">Val</option>
             </select>
           </div>
 
-          <div class="control">
-            <label for="grid-size">Zoom</label>
-            <input id="grid-size" type="range" min="32" max="400" value="200" step="4" />
-          </div>
-
-          <div class="control">
-            <label for="focus-logo">Focus op logo</label>
-            <input id="focus-logo" type="checkbox" />
-          </div>
-
-          <div class="control">
-            <label for="show-grid">Grid lijnen</label>
-            <input id="show-grid" type="checkbox" />
-          </div>
-
-          <div id="pattern-controls" class="mode-controls">
+          <div id="mode-settings" class="mode-settings">
+            <h3>Modusinstellingen</h3>
+          <div id="pattern-controls" class="mode-controls" hidden>
             <div class="control">
               <label for="pattern">Patroon</label>
               <select id="pattern">
                 <option value="empty">Leeg</option>
-                <option value="center">Centrum 2</option>
-                <option value="alternating">Om en om</option>
+                <option value="alternating" selected>Om en om</option>
                 <option value="line">Rechte lijn</option>
+                <option value="lines">Rechte lijn herhalen</option>
                 <option value="cross">Kruis</option>
-                <option value="diagonal">Diagonalen</option>
-                <option value="ring">Binnenring</option>
-                <option value="steps">Traptrede</option>
+                <option value="diagonal">X</option>
+                <option value="ring">Ringen</option>
               </select>
             </div>
           </div>
@@ -80,7 +66,7 @@
             </div>
           </div>
 
-          <div id="logo-controls" class="mode-controls" hidden>
+          <div id="logo-controls" class="mode-controls">
             <div class="control">
               <label for="logo-amount">Aantal</label>
               <select id="logo-amount">
@@ -96,6 +82,23 @@
                 <option value="vertical">Boven elkaar</option>
               </select>
             </div>
+          </div>
+
+          </div>
+
+          <div class="control">
+            <label for="grid-size">Zoom</label>
+            <input id="grid-size" type="range" min="0" max="32" value="0" step="1" />
+          </div>
+
+          <div class="control">
+            <label for="focus-logo">Focus op logo</label>
+            <input id="focus-logo" type="checkbox" />
+          </div>
+
+          <div class="control">
+            <label for="show-grid">Grid lijnen</label>
+            <input id="show-grid" type="checkbox" />
           </div>
 
           <div class="control">
@@ -150,7 +153,7 @@
                 <option value="easeInQuad">Ease in quad</option>
                 <option value="easeOutQuad">Ease out quad</option>
                 <option value="easeInOutQuad">Ease in-out quad</option>
-                <option value="easeInCubic">Ease in cubic</option>
+                <option value="easeInCubic" selected>Ease in cubic</option>
                 <option value="easeOutCubic">Ease out cubic</option>
                 <option value="easeInOutCubic">Ease in-out cubic</option>
                 <option value="easeInQuart">Ease in quart</option>

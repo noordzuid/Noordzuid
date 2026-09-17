@@ -1,7 +1,7 @@
 // Add one SVG here; preload and the interface update automatically.
 const LOGO_VARIANTS = [
   { id: 'text', label: 'Tekst' },
-  { id: 'original', label: 'Origineel', path: 'assets/logo.svg' },
+  { id: 'original', label: 'Standaard', path: 'assets/logo.svg' },
   { id: 'squares', label: 'Vierkanten', path: 'assets/logo-squares.svg' },
   { id: 'circles', label: 'Cirkels', path: 'assets/logo-circles.svg' },
   { id: 'long-circles', label: 'Lange cirkels', path: 'assets/logo-longcircles.svg' },
@@ -10,8 +10,8 @@ const LOGO_VARIANTS = [
 ];
 
 let state = {
-  mode: 'pattern',
-  pattern: 'center',
+  mode: 'logo',
+  pattern: 'alternating',
   gridSize: 64,
   gridPhase: 0,
   focusOnLogo: false,
@@ -35,7 +35,7 @@ let selectedKeyframe = 0;
 let selectedLogo = 0;
 const DEFAULT_KEYFRAME_DURATION = 800;
 const DEFAULT_ANIMATION_DURATION = 600;
-let easingType = 'easeInOutCubic';
+let easingType = 'easeInCubic';
 let stagger = 0;
 let playing = false;
 let exporting = false;
@@ -78,6 +78,7 @@ function setup() {
   }
 
   connectControls();
+  applyLogoPreset();
   addKeyframe();
   syncControls();
   if (document.fonts) {
@@ -147,6 +148,32 @@ function draw() {
   });
 }
 
+function zoomLevels() {
+  const gutter = 10 / 64;
+  const minimumRows = ceil(((height / 400 + gutter) / (1 + gutter)) * 2) / 2;
+  const maximumRows = floor(((height / 32 + gutter) / (1 + gutter)) * 2) / 2;
+  const levels = [];
+
+  // Each slider step changes the vertical fit by half a cell. Only the
+  // resulting pixel size is stored in state/keyframes, never this index.
+  for (let rows = maximumRows; rows >= minimumRows; rows -= 0.5) {
+    levels.push(height / (rows * (1 + gutter) - gutter));
+  }
+  return levels;
+}
+
+function syncZoomControl() {
+  const control = document.getElementById('grid-size');
+  const levels = zoomLevels();
+  let nearest = 0;
+  levels.forEach((size, index) => {
+    if (abs(size - state.gridSize) < abs(levels[nearest] - state.gridSize)) nearest = index;
+  });
+  control.max = levels.length - 1;
+  control.value = nearest;
+  control.title = `${state.gridSize.toFixed(1)} px`;
+}
+
 function gridMetrics(gridSize) {
   const cell = gridSize;
   const gap = cell * (10 / 64);
@@ -184,8 +211,34 @@ function remapLogoBetweenGrids(logo, fromGrid, toGrid) {
   return canvasPointToLogo(center, logo.rotation, toGrid);
 }
 
+function logoGridOffset(source) {
+  if (source.mode !== 'logo' || source.logos.length !== 2) return { x: 0, y: 0 };
+  return source.logoLayout === 'vertical' ? { x: 0, y: 0.5 } : { x: 0.5, y: 0 };
+}
+
+function transitionViewport(from, to, progress) {
+  const fromGrid = gridMetrics(from.gridSize);
+  const toGrid = gridMetrics(to.gridSize);
+  const fromOffset = logoGridOffset(from);
+  const toOffset = logoGridOffset(to);
+  return {
+    gridOrigin: {
+      left: lerp(fromGrid.left, toGrid.left, progress),
+      top: lerp(fromGrid.top, toGrid.top, progress)
+    },
+    viewOffset: {
+      x: lerp(fromOffset.x, toOffset.x, progress),
+      y: lerp(fromOffset.y, toOffset.y, progress)
+    }
+  };
+}
+
 function viewGridMetrics(drawingState) {
   const grid = gridMetrics(drawingState.gridSize);
+  if (drawingState.gridOrigin) Object.assign(grid, drawingState.gridOrigin);
+  const offset = drawingState.viewOffset || logoGridOffset(drawingState);
+  grid.left += offset.x * grid.pitch;
+  grid.top += offset.y * grid.pitch;
   const focusAmount = drawingState.viewFocus ?? (drawingState.focusOnLogo ? 1 : 0);
   if (focusAmount <= 0 || !drawingState.logos.length) return grid;
 
@@ -195,34 +248,14 @@ function viewGridMetrics(drawingState) {
       ? drawingState.logos
       : [drawingState.logos[constrain(selectedLogo, 0, drawingState.logos.length - 1)]];
   const logoCount = focusLogos.length;
-  const availableCells = logoCount === 1 ? 1.55 : 2.55;
-  const fittedFocusCell = min(width, height) / availableCells;
-  const focusCell = fittedFocusCell * (drawingState.gridSize / 64);
-  const focusGap = focusCell * (10 / 64);
-  const focusPitch = focusCell + focusGap;
   const centerCol = focusLogos.reduce((sum, logo) => sum + logo.col, 0) / logoCount;
   const centerRow = focusLogos.reduce((sum, logo) => sum + logo.row, 0) / logoCount;
 
-  const focusGrid = {
-    ...grid,
-    cell: focusCell,
-    gap: focusGap,
-    pitch: focusPitch,
-    gridWidth: grid.cols * focusCell + (grid.cols - 1) * focusGap,
-    gridHeight: grid.rows * focusCell + (grid.rows - 1) * focusGap,
-    left: width / 2 - centerCol * focusPitch - focusCell / 2,
-    top: height / 2 - centerRow * focusPitch - focusCell / 2
-  };
-
+  // Focus is a camera translation only: cell size and zoom range stay identical.
   return {
     ...grid,
-    cell: lerp(grid.cell, focusGrid.cell, focusAmount),
-    gap: lerp(grid.gap, focusGrid.gap, focusAmount),
-    pitch: lerp(grid.pitch, focusGrid.pitch, focusAmount),
-    gridWidth: lerp(grid.gridWidth, focusGrid.gridWidth, focusAmount),
-    gridHeight: lerp(grid.gridHeight, focusGrid.gridHeight, focusAmount),
-    left: lerp(grid.left, focusGrid.left, focusAmount),
-    top: lerp(grid.top, focusGrid.top, focusAmount)
+    left: lerp(grid.left, width / 2 - centerCol * grid.pitch - grid.cell / 2, focusAmount),
+    top: lerp(grid.top, height / 2 - centerRow * grid.pitch - grid.cell / 2, focusAmount)
   };
 }
 
@@ -677,13 +710,13 @@ function rollStepPose(from, to, progress, grid) {
 
   if (directionX !== 0) {
     pivot = {
-      x: start.x + directionX * grid.pitch / 2,
-      y: start.y + grid.pitch / 2
+      x: start.x + directionX * grid.cell / 2,
+      y: start.y + grid.cell / 2
     };
   } else {
     pivot = {
-      x: start.x - grid.pitch / 2,
-      y: start.y + directionY * grid.pitch / 2
+      x: start.x - grid.cell / 2,
+      y: start.y + directionY * grid.cell / 2
     };
   }
 
@@ -693,6 +726,10 @@ function rollStepPose(from, to, progress, grid) {
     pivot,
     radians((to.rotation - from.rotation) * progress)
   );
+  // Pivot on the actual logo corner; cross the gutter smoothly instead of
+  // rotating around an imaginary corner halfway into the empty padding.
+  center.x += directionX * grid.gap * progress;
+  center.y += directionY * grid.gap * progress;
 
   return canvasPointToLogo(
     center,
@@ -755,7 +792,7 @@ function connectControls() {
 
   document.getElementById('grid-size').addEventListener('input', event => {
     const oldGrid = gridMetrics(state.gridSize);
-    const newSize = constrain(Number(event.target.value) || 200, 32, 400);
+    const newSize = zoomLevels()[Number(event.target.value)];
     const newGrid = gridMetrics(newSize);
     const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
     const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
@@ -779,7 +816,7 @@ function connectControls() {
     }
 
     state.gridSize = newSize;
-    event.target.value = newSize;
+    syncZoomControl();
     moves = {};
 
     autoUpdateKeyframe();
@@ -898,6 +935,7 @@ function setMode(mode) {
 }
 
 function updateModeControls() {
+  document.getElementById('mode-settings').hidden = state.mode === 'fall';
   ['pattern', 'noise', 'logo'].forEach(mode => {
     document.getElementById(`${mode}-controls`).hidden = state.mode !== mode;
   });
@@ -1282,20 +1320,16 @@ function patternCells(pattern, grid) {
 
   if (pattern === 'empty') return cells;
 
-  if (pattern === 'center') {
-    return [
-      { col: centerCol, row: centerRow },
-      { col: centerCol + 1, row: centerRow }
-    ];
-  }
-
-  if (pattern === 'line') {
-    for (let col = 0; col <= lastCol; col++) {
-      cells.push({
-        col,
-        row: centerRow
-      });
-    }
+  if (pattern === 'line' || pattern === 'lines') {
+    const rows = pattern === 'line'
+      ? [centerRow]
+      : Array.from({ length: grid.rows }, (_, row) => row)
+        .filter(row => (row - centerRow) % 2 === 0);
+    rows.forEach(row => {
+      for (let col = 0; col <= lastCol; col++) {
+        cells.push({ col, row });
+      }
+    });
     return cells;
   }
 
@@ -1326,27 +1360,14 @@ function patternCells(pattern, grid) {
   }
 
   if (pattern === 'ring') {
-    for (let col = 0; col <= lastCol; col++) {
-      cells.push({ col, row: 0 });
-      if (lastRow > 0) cells.push({ col, row: lastRow });
-    }
-    for (let row = 1; row < lastRow; row++) {
-      cells.push({ col: 0, row });
-      cells.push({ col: lastCol, row });
-    }
-    return cells;
-  }
-
-  if (pattern === 'steps') {
-    const length = min(grid.cols, grid.rows);
-    const colOffset = floor((grid.cols - length) / 2);
-    const rowOffset = floor((grid.rows - length) / 2);
-    for (let position = 0; position < length; position++) {
-      const col = colOffset + position;
-      const row = rowOffset + position;
-      cells.push({ col, row });
-      if (position < length - 1) {
-        cells.push({ col: col + 1, row });
+    const maxRadius = max(centerCol, centerRow);
+    for (let radius = 1; radius <= maxRadius; radius += 2) {
+      for (let row = max(0, centerRow - radius); row <= min(lastRow, centerRow + radius); row++) {
+        for (let col = max(0, centerCol - radius); col <= min(lastCol, centerCol + radius); col++) {
+          if (max(abs(col - centerCol), abs(row - centerRow)) === radius) {
+            cells.push({ col, row });
+          }
+        }
       }
     }
     return cells;
@@ -1480,8 +1501,8 @@ function loadKeyframe() {
 
 function syncControls() {
   document.getElementById('mode').value = state.mode || 'pattern';
-  document.getElementById('pattern').value = state.pattern || 'center';
-  document.getElementById('grid-size').value = state.gridSize;
+  document.getElementById('pattern').value = state.pattern || 'alternating';
+  syncZoomControl();
   document.getElementById('show-grid').checked = state.showGrid;
   document.getElementById('focus-logo').checked = Boolean(state.focusOnLogo);
   document.getElementById('logo-variant').value = state.logoVariant || 'original';
@@ -1765,6 +1786,7 @@ function playbackState(elapsed) {
   // transition, which made the fall start mid-roll and reset at that switch.
   if (to.mode === 'fall' && from.mode !== 'fall') {
     const fallState = cloneState(raw >= 1 ? to : from);
+    Object.assign(fallState, transitionViewport(from, to, colorProgress));
     fallState.mode = 'fall';
     fallState.focusOnLogo = raw < 0.5
       ? Boolean(from.focusOnLogo)
@@ -1849,8 +1871,9 @@ function playbackState(elapsed) {
       : [logos[constrain(selectedLogo, 0, max(0, logos.length - 1))]].filter(Boolean);
 
   return {
+    ...transitionViewport(from, to, colorProgress),
     mode: raw < 0.5 ? (from.mode || 'pattern') : (to.mode || 'pattern'),
-    pattern: raw < 0.5 ? (from.pattern || 'center') : (to.pattern || 'center'),
+    pattern: raw < 0.5 ? (from.pattern || 'alternating') : (to.pattern || 'alternating'),
     focusOnLogo: raw < 0.5 ? Boolean(from.focusOnLogo) : Boolean(to.focusOnLogo),
     viewFocus: lerp(from.focusOnLogo ? 1 : 0, to.focusOnLogo ? 1 : 0, colorProgress),
     gridSize: lerp(from.gridSize, to.gridSize, colorProgress),
@@ -1980,6 +2003,7 @@ function resizeFromInputs() {
   moves = {};
   if (state.mode === 'pattern') applyPattern();
   if (state.mode === 'noise') applyNoiseField();
+  syncZoomControl();
   autoUpdateKeyframe();
 }
 

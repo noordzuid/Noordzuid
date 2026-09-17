@@ -116,6 +116,23 @@ select {
   display: none;
 }
 
+.mode-settings {
+  margin: 8px -8px 14px;
+  padding: 10px 8px;
+  border: 1px solid #e2e2e2;
+  border-radius: 4px;
+  background: #f7f7f7;
+}
+
+.mode-settings h3 {
+  margin: 0 0 6px;
+  color: #777777;
+  font-size: 11px;
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 #keyframe-list {
   height: 105px;
 }
