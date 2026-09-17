@@ -133,6 +133,27 @@ select {
   letter-spacing: 0.04em;
 }
 
+.option-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.option-buttons + .option-buttons {
+  margin-top: 8px;
+}
+
+.option-buttons button {
+  padding: 5px 2px;
+  font-size: 11px;
+}
+
+.option-buttons button[aria-pressed="true"] {
+  border-color: #171717;
+  background: #171717;
+  color: #ffffff;
+}
+
 #keyframe-list {
   height: 105px;
 }

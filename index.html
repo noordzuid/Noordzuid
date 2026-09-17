@@ -20,67 +20,42 @@
               <option value="logo" selected>Logo</option>
               <option value="pattern">Patroon</option>
               <option value="noise">Noise veld</option>
-              <option value="fall">Val</option>
             </select>
           </div>
 
           <div id="mode-settings" class="mode-settings">
-            <h3>Modusinstellingen</h3>
           <div id="pattern-controls" class="mode-controls" hidden>
-            <div class="control">
-              <label for="pattern">Patroon</label>
-              <select id="pattern">
-                <option value="empty">Leeg</option>
-                <option value="alternating" selected>Om en om</option>
-                <option value="line">Rechte lijn</option>
-                <option value="lines">Rechte lijn herhalen</option>
-                <option value="cross">Kruis</option>
-                <option value="diagonal">X</option>
-                <option value="ring">Ringen</option>
-              </select>
+            <div id="pattern" class="option-buttons" role="group" aria-label="Patroon">
+              <button data-value="empty">Leeg</button>
+              <button data-value="alternating">Om en om</button>
+              <button data-value="line">Lijn</button>
+              <button data-value="lines">Lijnen</button>
+              <button data-value="cross">Kruis</button>
+              <button data-value="diagonal">X</button>
+              <button data-value="ring">Ringen</button>
             </div>
           </div>
 
           <div id="noise-controls" class="mode-controls" hidden>
-            <div class="control">
-              <label for="noise-motion">Beweging</label>
-              <select id="noise-motion">
-                <option value="calm">Rustig</option>
-                <option value="playful" selected>Normaal</option>
-                <option value="wild">Snel</option>
-              </select>
+            <div id="noise-motion" class="option-buttons" role="group" aria-label="Noise beweging">
+              <button data-value="calm">Rustig</button>
+              <button data-value="playful">Normaal</button>
+              <button data-value="wild">Snel</button>
             </div>
 
-            <div class="control">
-              <label for="noise-density">Vulling</label>
-              <select id="noise-density">
-                <option value="airy">Luchtig</option>
-                <option value="balanced" selected>Normaal</option>
-                <option value="full">Vol</option>
-              </select>
+            <div id="noise-density" class="option-buttons" role="group" aria-label="Noise vulling">
+              <button data-value="airy">Luchtig</button>
+              <button data-value="balanced">Gemiddeld</button>
+              <button data-value="full">Vol</button>
             </div>
 
-            <div class="control">
-              <label for="noise-logo-style">Stijl variëren</label>
-              <input id="noise-logo-style" type="checkbox" />
-            </div>
           </div>
 
           <div id="logo-controls" class="mode-controls">
-            <div class="control">
-              <label for="logo-amount">Aantal</label>
-              <select id="logo-amount">
-                <option value="1">1 logo</option>
-                <option value="2" selected>2 logo’s</option>
-              </select>
-            </div>
-
-            <div class="control">
-              <label for="logo-layout">Opstelling</label>
-              <select id="logo-layout">
-                <option value="horizontal">Naast elkaar</option>
-                <option value="vertical">Boven elkaar</option>
-              </select>
+            <div id="logo-layout" class="option-buttons" role="group" aria-label="Logo opstelling">
+              <button data-value="horizontal">Naast elkaar</button>
+              <button data-value="vertical">Boven elkaar</button>
+              <button data-value="single">Enkel</button>
             </div>
           </div>
 
@@ -109,6 +84,11 @@
           <div id="text-controls" class="control" hidden>
             <label for="logo-text">Tekst</label>
             <input id="logo-text" type="text" value="NOORDZUID" />
+          </div>
+
+          <div class="control">
+            <label for="fall">Val</label>
+            <input id="fall" type="checkbox" />
           </div>
 
           <div class="control">
