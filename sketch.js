@@ -57,6 +57,9 @@ let playbackFallActive = false;
 let playbackNoiseRuntime = null;
 let playbackNoiseSources = {};
 let fallResume = null;
+let lastPlaybackFallState = null;
+let fallReturnTransition = null;
+let liveFallReturn = null;
 
 function preload() {
   LOGO_VARIANTS.forEach(variant => {
@@ -91,9 +94,19 @@ function setup() {
 }
 
 function draw() {
-  updateNoiseMotion();
-  updateFallMotion();
+  if (!liveFallReturn) {
+    updateNoiseMotion();
+    updateFallMotion();
+  }
   let drawingState = state;
+  if (liveFallReturn && !playing && !exporting) {
+    const elapsed = millis() - liveFallReturn.start;
+    drawingState = fallReturnState(liveFallReturn, state, elapsed, liveFallReturn.duration);
+    if (elapsed >= liveFallReturn.duration) {
+      liveFallReturn = null;
+      nextNoiseMoveAt = millis() + 250;
+    }
+  }
 
   if (playing || exporting) {
     const elapsed = millis() - animationStart;
@@ -882,6 +895,8 @@ function connectControls() {
     });
   });
   document.getElementById('fall').addEventListener('change', event => {
+    const fallen = cloneState(state);
+    liveFallReturn = null;
     state.fall = event.target.checked;
     if (state.fall) {
       state.preFallLogos = state.logos.map(logo => ({ ...logo }));
@@ -894,12 +909,12 @@ function connectControls() {
     else {
       const original = state.preFallLogos || keyframes[selectedKeyframe]?.preFallLogos || keyframes[selectedKeyframe]?.logos;
       if (original) state.logos = original.map(logo => ({ ...logo }));
-      if (fallResume) {
-        const pause = millis() - fallResume.pausedAt;
-        moves = fallResume.moves;
-        Object.values(moves).forEach(move => { move.start += pause; });
-        nextNoiseMoveAt = fallResume.nextMoveAt + pause;
-      } else nextNoiseMoveAt = millis() + 250;
+      liveFallReturn = {
+        source: fallen,
+        items: fallReturnItems(fallen, state),
+        start: millis(),
+        duration: timingFromControls().animationDuration
+      };
       fallResume = null;
     }
     autoUpdateKeyframe({ preserveFallLayout: false });
@@ -1193,10 +1208,11 @@ function playbackNoiseState(drawingState) {
     nextNoiseMoveAt = savedNextMoveAt;
   }
 
-  return {
+  playbackNoiseRuntime.visibleState = {
     ...drawingState,
     logos: visibleLogos
   };
+  return playbackNoiseRuntime.visibleState;
 }
 
 function isFalling(source = state) {
@@ -1205,9 +1221,14 @@ function isFalling(source = state) {
 
 function resetFallBodies(sourceState = state) {
   const grid = gridMetrics(sourceState.gridSize);
+  const view = viewGridMetrics(sourceState);
+  const viewportLeft = grid.left - view.left;
+  const viewportTop = grid.top - view.top;
 
   fallBodies = sourceState.logos.map((logo, index) => {
     const center = cellCenter(logo.col, logo.row, grid);
+    const angle = radians(logo.rotation);
+    const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + 3;
     return {
       x: center.x,
       y: center.y,
@@ -1216,7 +1237,13 @@ function resetFallBodies(sourceState = state) {
       rotation: logo.rotation,
       angularVelocity: sin((index + 1) * 1.37) * 4,
       variant: logo.variant,
-      glyphIndex: logo.glyphIndex
+      glyphIndex: logo.glyphIndex,
+      bounds: {
+        left: min(viewportLeft, center.x - extent),
+        right: max(viewportLeft + width, center.x + extent),
+        top: min(viewportTop, center.y - extent),
+        bottom: max(viewportTop + height, center.y + extent)
+      }
     };
   });
   lastFallUpdate = millis();
@@ -1240,10 +1267,11 @@ function playbackFallState(drawingState) {
     playbackFallActive = true;
   }
 
-  return {
+  lastPlaybackFallState = {
     ...drawingState,
     logos: stepFallBodies(drawingState)
   };
+  return lastPlaybackFallState;
 }
 
 function stepFallBodies(sourceState) {
@@ -1253,11 +1281,14 @@ function stepFallBodies(sourceState) {
   const elapsed = constrain((now - lastFallUpdate) / 1000, 0, 0.04);
   lastFallUpdate = now;
   const grid = gridMetrics(sourceState.gridSize);
+  const view = viewGridMetrics(sourceState);
+  const viewportLeft = grid.left - view.left;
+  const viewportTop = grid.top - view.top;
   const collisionPadding = 3;
   const steps = 4;
   const dt = elapsed / steps;
 
-  for (let step = 0; step < steps; step++) {
+  for (let step = 0; elapsed > 0 && step < steps; step++) {
     fallBodies.forEach(body => {
       body.vy += 980 * dt;
       body.x += body.vx * dt;
@@ -1267,21 +1298,26 @@ function stepFallBodies(sourceState) {
       const angle = radians(body.rotation);
       const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
 
-      if (body.x - extent < 0) {
-        body.x = extent;
+      const bounds = body.bounds;
+      if (body.x - extent >= viewportLeft) bounds.left = viewportLeft;
+      if (body.x + extent <= viewportLeft + width) bounds.right = viewportLeft + width;
+      if (body.y - extent >= viewportTop) bounds.top = viewportTop;
+      if (body.y + extent <= viewportTop + height) bounds.bottom = viewportTop + height;
+      if (body.x - extent < bounds.left) {
+        body.x = bounds.left + extent;
         body.vx = abs(body.vx) * 0.42;
         body.angularVelocity += 0.8;
-      } else if (body.x + extent > width) {
-        body.x = width - extent;
+      } else if (body.x + extent > bounds.right) {
+        body.x = bounds.right - extent;
         body.vx = -abs(body.vx) * 0.42;
         body.angularVelocity -= 0.8;
       }
 
-      if (body.y - extent < 0) {
-        body.y = extent;
+      if (body.y - extent < bounds.top) {
+        body.y = bounds.top + extent;
         body.vy = max(0, body.vy);
-      } else if (body.y + extent > height) {
-        body.y = height - extent;
+      } else if (body.y + extent > bounds.bottom) {
+        body.y = bounds.bottom - extent;
         body.vy = 0;
         body.vx *= 0.9;
         body.angularVelocity *= 0.7;
@@ -1294,8 +1330,8 @@ function stepFallBodies(sourceState) {
     fallBodies.forEach(body => {
       const angle = radians(body.rotation);
       const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
-      body.x = constrain(body.x, extent, width - extent);
-      body.y = constrain(body.y, extent, height - extent);
+      body.x = constrain(body.x, body.bounds.left + extent, body.bounds.right - extent);
+      body.y = constrain(body.y, body.bounds.top + extent, body.bounds.bottom - extent);
     });
   }
 
@@ -1553,6 +1589,9 @@ function loadKeyframe() {
   if (!keyframes[selectedKeyframe]) return;
   state = cloneState(keyframes[selectedKeyframe]);
   fallResume = null;
+  liveFallReturn = null;
+  lastPlaybackFallState = null;
+  fallReturnTransition = null;
   moves = {};
   fallBodies = [];
   playbackFallActive = false;
@@ -1586,6 +1625,11 @@ function togglePlayback() {
   if (playing) return stopPlayback();
   if (!keyframes.length) return;
 
+  liveFallReturn = null;
+  lastPlaybackFallState = null;
+  fallReturnTransition = null;
+  playbackFallActive = false;
+
   moves = {};
   playbackNoiseRuntime = null;
   playbackNoiseSources = {};
@@ -1596,6 +1640,9 @@ function togglePlayback() {
 
 function stopPlayback() {
   playing = false;
+  liveFallReturn = null;
+  lastPlaybackFallState = null;
+  fallReturnTransition = null;
   fallBodies = [];
   playbackFallActive = false;
   playbackNoiseRuntime = null;
@@ -1715,40 +1762,114 @@ function transitionPlan(index, source = keyframes[index]) {
     });
   });
 
-  to.logos.forEach((logo, targetIndex) => {
-    if (plannedTargets.has(targetIndex)) return;
-    const path = enterRollPath(logo, transitionGrid, to.gridPhase || 0);
+  const enteringTargets = to.logos
+    .map((logo, targetIndex) => ({ logo, targetIndex }))
+    .filter(item => !plannedTargets.has(item.targetIndex))
+    .sort((a, b) => entryDepth(b.logo, transitionGrid) - entryDepth(a.logo, transitionGrid));
+  const parkedTargets = [...plannedTargets].map(targetIndex => to.logos[targetIndex]);
+
+  enteringTargets.forEach(({ logo, targetIndex }) => {
+    const path = safeEnterRollPath(logo, transitionGrid, parkedTargets);
     items.push({
       kind: 'enter',
       targetIndex,
       path,
       weight: pathWeight(path)
     });
+    parkedTargets.push(logo);
   });
 
-  const movingItems = items.filter(item => item.weight > 0);
-  const staggerWindow = movingItems.length > 1 && transitionStagger > 0.001
-    ? animationLength * 0.45 * transitionStagger
-    : 0;
-  const delay = movingItems.length > 1
-    ? staggerWindow / (movingItems.length - 1)
-    : 0;
-  const movementDuration = animationLength - staggerWindow;
-  let movingIndex = 0;
-
-  items.forEach(item => {
-    if (item.weight === 0) {
-      item.start = 0;
-      item.duration = 0;
-      return;
-    }
-
-    item.start = movingIndex * delay;
-    item.duration = movementDuration;
-    movingIndex++;
-  });
+  scheduleRollRoutes(items, transitionGrid, animationLength, transitionStagger);
 
   return { items, duration: frameLength, animationDuration: animationLength };
+}
+
+function entryDepth(logo, grid) {
+  return min(logo.col + 1, grid.cols - logo.col, logo.row + 1, grid.rows - logo.row);
+}
+
+function safeEnterRollPath(logo, grid, parked) {
+  const direct = enterRollPath(logo, grid);
+  const blocked = new Set(parked.map(point => `${point.col},${point.row}`));
+  if (!direct.some(point => blocked.has(`${point.col},${point.row}`))) return direct;
+
+  // A previously landed logo is an obstacle, not a route to roll through.
+  const edges = [];
+  for (let col = 0; col < grid.cols; col++) {
+    edges.push({ col, row: 0, outside: { col, row: -1 } });
+    edges.push({ col, row: grid.rows - 1, outside: { col, row: grid.rows } });
+  }
+  for (let row = 0; row < grid.rows; row++) {
+    edges.push({ col: 0, row, outside: { col: -1, row } });
+    edges.push({ col: grid.cols - 1, row, outside: { col: grid.cols, row } });
+  }
+  edges.sort((a, b) => (
+    abs(a.col - logo.col) + abs(a.row - logo.row) -
+    abs(b.col - logo.col) - abs(b.row - logo.row)
+  ));
+
+  for (const edge of edges) {
+    if (blocked.has(`${edge.col},${edge.row}`)) continue;
+    const inside = buildRollPath({ col: edge.col, row: edge.row, rotation: 0 }, logo.col, logo.row, grid, parked);
+    if (!inside.length) continue;
+    const path = [{ ...edge.outside, rotation: 0 }, ...inside];
+    path[path.length - 1].rotation = logo.rotation;
+    for (let i = path.length - 2; i >= 0; i--) {
+      path[i].rotation = path[i + 1].rotation - anchoredTurn(path[i], path[i + 1]);
+    }
+    return path;
+  }
+  return direct;
+}
+
+function scheduleRollRoutes(items, grid, animationLength, transitionStagger) {
+  const reservations = new Map();
+  const inside = point => point.col >= 0 && point.col < grid.cols && point.row >= 0 && point.row < grid.rows;
+  const ordered = items.filter(item => item.weight > 0).sort((a, b) => {
+    const priority = item => item.kind === 'exit' ? 0 : item.kind === 'enter' ? 2 : 1;
+    return priority(a) - priority(b);
+  });
+  let lastFinish = 1;
+
+  ordered.forEach((item, index) => {
+    let start = index * transitionStagger * 0.5;
+    // Reserve both cells swept by a quarter-turn, with a small clearance.
+    // Independent routes never wait; shared routes get only the needed delay.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let step = 0; step < item.path.length - 1; step++) {
+        for (const point of [item.path[step], item.path[step + 1]]) {
+          if (!inside(point)) continue;
+          const intervals = reservations.get(`${point.col},${point.row}`) || [];
+          for (const interval of intervals) {
+            if (start + step < interval.end - 0.000001 && start + step + 1.12 > interval.start + 0.000001) {
+              start = interval.end - step;
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+
+    item.start = start;
+    item.duration = item.weight;
+    lastFinish = max(lastFinish, start + item.weight);
+    for (let step = 0; step < item.path.length - 1; step++) {
+      for (const point of [item.path[step], item.path[step + 1]]) {
+        if (!inside(point)) continue;
+        const key = `${point.col},${point.row}`;
+        if (!reservations.has(key)) reservations.set(key, []);
+        reservations.get(key).push({ start: start + step, end: start + step + 1.12 });
+      }
+    }
+  });
+
+  const cellDuration = animationLength / lastFinish;
+  items.forEach(item => {
+    item.start = (item.start || 0) * cellDuration;
+    item.duration = item.weight * cellDuration;
+  });
 }
 
 function exitRollPath(logo, grid, phase = state.gridPhase || 0) {
@@ -1807,6 +1928,88 @@ function outwardDirection(logo, grid) {
   ][quarter];
 }
 
+// Recovery paths use screen positions: fallen bodies are no longer on a cell,
+// and changing zoom or focus must not snap them back onto the saved grid first.
+function fallReturnItems(source, target) {
+  const fromGrid = viewGridMetrics(source);
+  const toGrid = viewGridMetrics(target);
+  const available = source.logos.map(logo => ({
+    logo, point: cellCenter(logo.col, logo.row, fromGrid)
+  }));
+  const pairs = target.logos.map(logo => {
+    const end = cellCenter(logo.col, logo.row, toGrid);
+    let nearest = -1;
+    let distance = Infinity;
+    available.forEach((item, index) => {
+      const d = Math.hypot(item.point.x - end.x, item.point.y - end.y);
+      if (d < distance) { distance = d; nearest = index; }
+    });
+    const start = nearest >= 0 ? available.splice(nearest, 1)[0] : {
+      logo: { ...logo, rotation: logo.rotation - 90 },
+      point: { x: end.x, y: height + toGrid.cell }
+    };
+    return { start, end, logo };
+  });
+  available.forEach(start => pairs.push({
+    start, end: { x: start.point.x, y: height + fromGrid.cell * 2 },
+    logo: { ...start.logo, rotation: start.logo.rotation + 90 }, exit: true
+  }));
+  return pairs.map(pair => {
+    const path = [{ ...pair.start.point, rotation: pair.start.logo.rotation }];
+    // Orthogonal, cell-sized rolls, with an exact fractional final step.
+    ['x', 'y'].forEach(axis => {
+      while (Math.abs(pair.end[axis] - path[path.length - 1][axis]) > 0.001) {
+        const previous = path[path.length - 1];
+        const delta = Math.sign(pair.end[axis] - previous[axis]) *
+          Math.min(toGrid.pitch, Math.abs(pair.end[axis] - previous[axis]));
+        path.push({ ...previous, [axis]: previous[axis] + delta,
+          rotation: previous.rotation + Math.sign(delta) * 90 });
+      }
+    });
+    const finalRotation = path[path.length - 1].rotation;
+    const correction = ((pair.logo.rotation - finalRotation + 540) % 360) - 180;
+    return { ...pair, path, correction };
+  });
+}
+
+function fallReturnState(transition, target, elapsed, duration) {
+  const raw = constrain(elapsed / max(1, duration), 0, 1);
+  if (raw >= 1) return cloneState(target);
+  const source = transition.source;
+  const easing = target.easing || easingType;
+  const progress = constrain(applyEasing(raw, easing), 0, 1);
+  const result = {
+    ...cloneState(target), fall: false, noiseRunning: false,
+    gridSize: lerp(source.gridSize, target.gridSize, progress),
+    foreground: lerpColor(color(source.foreground), color(target.foreground), progress).toString('#rrggbb'),
+    background: lerpColor(color(source.background), color(target.background), progress).toString('#rrggbb'),
+    viewFocus: 0, viewOffset: { x: 0, y: 0 }
+  };
+  const grid = gridMetrics(result.gridSize);
+  result.gridOrigin = { left: grid.left, top: grid.top };
+  result.logos = transition.items.map(item => {
+    const count = item.path.length - 1;
+    const position = progress * count;
+    const index = min(max(0, count - 1), floor(position));
+    const from = item.path[index];
+    const to = item.path[min(index + 1, count)];
+    const local = count ? applyEasing(position - index, easing) : 0;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const pivot = dx !== 0
+      ? { x: from.x + dx / 2, y: from.y + abs(dx) / 2 }
+      : { x: from.x - abs(dy) / 2, y: from.y + dy / 2 };
+    const center = count ? rotatePoint(from, pivot, radians((to.rotation - from.rotation) * local)) : from;
+    const rotation = lerp(from.rotation, to.rotation, local) + item.correction * progress;
+    return {
+      ...item.logo,
+      ...canvasPointToLogo(center, rotation, grid),
+      variant: raw < 0.5 ? item.start.logo.variant : item.logo.variant
+    };
+  });
+  return result;
+}
+
 function playbackState(elapsed) {
   if (keyframes.length < 2) return cloneState(keyframes[0] || state);
 
@@ -1826,30 +2029,40 @@ function playbackState(elapsed) {
   const storedFrom = keyframes[segment];
   const to = keyframes[segment + 1];
 
-  // Leave noise from its live, settled cell destinations, not its old saved
-  // layout. Freeze this source once so the exit route cannot change each frame.
-  if (storedFrom.mode === 'noise' && to.mode !== 'noise' && !playbackNoiseSources[segment]) {
-    const liveSource = playbackNoiseRuntime?.state;
+  // A fall interrupts noise at its actual visible roll pose, including its
+  // intermediate rotation/style. This also applies when both frames use noise
+  // and only the fall checkbox changes. Ordinary exits still use settled cells.
+  if (storedFrom.mode === 'noise' && !isFalling(storedFrom) &&
+      (to.mode !== 'noise' || isFalling(to)) && !playbackNoiseSources[segment]) {
+    const liveSource = isFalling(to)
+      ? playbackNoiseRuntime?.visibleState || playbackNoiseRuntime?.state
+      : playbackNoiseRuntime?.state;
     playbackNoiseSources[segment] = {
-      ...cloneState(storedFrom),
+      ...cloneState(liveSource || storedFrom),
       gridSize: liveSource?.gridSize || storedFrom.gridSize,
       logos: (liveSource?.logos || storedFrom.logos).map(logo => ({ ...logo }))
     };
   }
   const from = playbackNoiseSources[segment] || storedFrom;
-  const plan = transitionPlan(segment, from);
-  const duration = plan.duration;
+  // Physics and recovery have their own motion, not a grid route. In-flight
+  // noise poses have fractional cells: running grid BFS on them is expensive
+  // and cannot reach integer destinations anyway.
+  const plan = isFalling(from) || isFalling(to)
+    ? { items: [], animationDuration: keyframeAnimationDuration(segment + 1) }
+    : transitionPlan(segment, from);
   const segmentElapsed = elapsed - segmentStart;
   const raw = constrain(segmentElapsed / plan.animationDuration, 0, 1);
   const transitionEasing = to.easing || easingType;
   const eased = applyEasing(raw, transitionEasing);
   const colorProgress = constrain(eased, 0, 1);
 
-  // Leaving physics is a deliberate hard cut: never rebuild fallen items onto a grid.
+  // Freeze the actual fallen pose once and roll it back into the next layout.
   if (isFalling(from) && !isFalling(to)) {
-    return segmentElapsed < plan.animationDuration
-      ? cloneState(from)
-      : cloneState(to);
+    if (!fallReturnTransition || fallReturnTransition.segment !== segment) {
+      const fallen = cloneState(lastPlaybackFallState || from);
+      fallReturnTransition = { segment, source: fallen, items: fallReturnItems(fallen, to) };
+    }
+    return fallReturnState(fallReturnTransition, to, segmentElapsed, plan.animationDuration);
   }
 
   // Enter physics immediately and use the source keyframe's untouched grid
@@ -1888,9 +2101,12 @@ function playbackState(elapsed) {
   const sourceFocusLogos = [];
   const targetFocusLogos = [];
 
+  // Ease one shared transition clock, preserving route delays and stagger.
+  // Individual cell rolls retain their own easing as well.
+  const transitionElapsed = colorProgress * plan.animationDuration;
   plan.items.forEach(item => {
     const progress = item.duration > 0
-      ? constrain((segmentElapsed - item.start) / item.duration, 0, 1)
+      ? constrain((transitionElapsed - item.start) / item.duration, 0, 1)
       : 1;
     const poseSource = item.kind === 'enter'
       ? to.logos[item.targetIndex]
@@ -2062,26 +2278,39 @@ function bounceOut(t) {
 function resizeFromInputs() {
   const newWidth = constrain(Number(document.getElementById('canvas-width').value) || 600, 200, 1920);
   const newHeight = constrain(Number(document.getElementById('canvas-height').value) || 600, 200, 1920);
-  const oldGrid = gridMetrics(state.gridSize);
+  if (newWidth === width && newHeight === height) return;
+  const scale = min(newWidth / width, newHeight / height);
+  // Every frame has its own zoom/layout. Capture each grid before resizing;
+  // changing export resolution must never reapply patterns or noise seeds.
+  const layouts = [state, ...keyframes].map(source => ({
+    source,
+    oldGrid: gridMetrics(source.gridSize)
+  }));
+  stopPlayback();
   resizeCanvas(newWidth, newHeight);
   fitCanvasPreview();
-  const newGrid = gridMetrics(state.gridSize);
-  const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
-  const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
-
-  state.gridPhase = ((state.gridPhase || 0) - shiftCol - shiftRow) % 2;
-  if (state.gridPhase < 0) state.gridPhase += 2;
-
-  state.logos.forEach(logo => {
-    logo.col += shiftCol;
-    logo.row += shiftRow;
+  layouts.forEach(({ source, oldGrid }) => {
+    source.gridSize *= scale;
+    const newGrid = gridMetrics(source.gridSize);
+    const shiftCol = (newGrid.cols - oldGrid.cols) / 2;
+    const shiftRow = (newGrid.rows - oldGrid.rows) / 2;
+    const reposition = logo => ({
+      ...logo, col: logo.col + shiftCol, row: logo.row + shiftRow
+    });
+    source.gridPhase = (((source.gridPhase || 0) - shiftCol - shiftRow) % 2 + 2) % 2;
+    source.logos = source.logos.map(reposition);
+    if (source.preFallLogos) source.preFallLogos = source.preFallLogos.map(reposition);
+    // These are transient camera coordinates, not part of the saved layout.
+    delete source.gridOrigin;
+    delete source.viewOffset;
+    delete source.viewFocus;
+    delete source.focusLogos;
   });
-
   moves = {};
-  if (state.mode === 'pattern') applyPattern();
-  if (state.mode === 'noise') applyNoiseField();
-  syncZoomControl();
-  autoUpdateKeyframe();
+  fallResume = null;
+  nextNoiseMoveAt = millis() + 250;
+  clearLogoRenderCache();
+  syncControls();
 }
 
 function fitCanvasPreview() {
