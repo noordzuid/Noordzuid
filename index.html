@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Noordzuid animatie tool</title>
+    <link rel="icon" type="image/x-icon" href="./assets/N3.ico">
     <link rel="stylesheet" href="style.css" />
     <script src="libraries/p5.min.js"></script>
   </head>
@@ -80,13 +81,19 @@
           </div>
 
           <div class="control">
-            <label for="logo-variant">Logo stijl</label>
+            <label for="logo-variant">Stijl</label>
             <select id="logo-variant"></select>
           </div>
 
-          <div id="text-controls" class="control" hidden>
-            <label for="logo-text">Tekst</label>
-            <input id="logo-text" type="text" value="NOORDZUID" />
+          <div id="text-controls" class="mode-settings" hidden>
+            <div class="control">
+              <label for="logo-text">Tekst</label>
+              <input id="logo-text" type="text" value="NOORDZUID" />
+            </div>
+            <div class="control">
+              <label for="text-once">Tekst één keer</label>
+              <input id="text-once" type="checkbox" />
+            </div>
           </div>
 
           <div class="control">

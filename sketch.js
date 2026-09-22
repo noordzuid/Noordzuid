@@ -10,6 +10,11 @@ const LOGO_VARIANTS = [
   { id: 'lines', label: 'Lijnen', path: 'assets/logo-lines.svg' }
 ];
 
+// Every envelope uses one shared travel direction. Departing marks roll from
+// the source cell to the right; arriving marks start left of their target and
+// continue in that same direction into it.
+const ENVELOPE_DIRECTION = Object.freeze({ col: 1, row: 0 });
+
 let state = {
   mode: 'logo',
   pattern: 'alternating',
@@ -19,11 +24,12 @@ let state = {
   showGrid: false,
   logoVariant: 'original',
   logoText: 'NOORDZUID',
+  textRepeat: true,
   logoLayout: 'horizontal',
   noiseMotion: 'playful',
   noiseDensity: 'balanced',
   fall: false,
-  foreground: '#F28EFF',
+  foreground: '#FF8D8C',
   background: '#270C13',
   logos: [
     { col: 7, row: 4, rotation: 90 },
@@ -49,17 +55,21 @@ let moves = {};
 let logoImages = {};
 let logoRenderCache = {};
 let textGlyphCache = {};
+let textGlyphInkCache = {};
+let textGlyphWeightCache = {};
 let noiseIteration = 0;
 let nextNoiseMoveAt = 0;
 let fallBodies = [];
 let lastFallUpdate = 0;
 let playbackFallActive = false;
+let playbackFallLayoutKey = null;
 let playbackNoiseRuntime = null;
 let playbackNoiseSources = {};
 let fallResume = null;
 let lastPlaybackFallState = null;
 let fallReturnTransition = null;
 let liveFallReturn = null;
+let keyframePreviewTransition = null;
 
 function preload() {
   LOGO_VARIANTS.forEach(variant => {
@@ -99,21 +109,34 @@ function setup() {
   addKeyframe();
   syncControls();
   if (document.fonts) {
-    document.fonts.load('100px Saans').then(clearLogoRenderCache);
+    document.fonts.load('100px Saans').then(() => {
+      clearLogoRenderCache();
+      preloadTextGlyphs(state.logoText);
+    });
   }
   showStatus('Linksklik om te rollen · rechtermuisklik om een cel te vullen of legen');
 }
 
 function draw() {
-  if (!liveFallReturn) {
+  if (!liveFallReturn && !keyframePreviewTransition) {
     updateNoiseMotion();
     updateFallMotion();
   }
   let drawingState = state;
+  if (keyframePreviewTransition && !playing && !exporting) {
+    const elapsed = millis() - keyframePreviewTransition.start;
+    drawingState = keyframePreviewState(elapsed);
+    if (elapsed >= keyframePreviewTransition.duration) {
+      state = cloneState(keyframePreviewTransition.target);
+      drawingState = state;
+      keyframePreviewTransition = null;
+      nextNoiseMoveAt = millis() + 250;
+    }
+  }
   if (liveFallReturn && !playing && !exporting) {
     const elapsed = millis() - liveFallReturn.start;
     drawingState = fallReturnState(liveFallReturn, state, elapsed, liveFallReturn.duration);
-    if (elapsed >= liveFallReturn.duration) {
+    if (liveFallReturn.complete) {
       liveFallReturn = null;
       nextNoiseMoveAt = millis() + 250;
     }
@@ -127,6 +150,7 @@ function draw() {
       drawingState = playbackFallState(drawingState);
     } else {
       playbackFallActive = false;
+      playbackFallLayoutKey = null;
     }
 
     if (drawingState.mode === 'noise' && !isFalling(drawingState) && drawingState.noiseRunning !== false) {
@@ -135,7 +159,10 @@ function draw() {
       playbackNoiseRuntime = null;
     }
 
-    if (playing && elapsed >= animationDuration()) {
+    if (
+      playing && elapsed >= animationDuration() &&
+      (!fallReturnTransition || fallReturnTransition.complete)
+    ) {
       const finalState = cloneState(keyframes[keyframes.length - 1]);
 
       // Keep the final physics pose so stopping playback cannot snap back to
@@ -157,10 +184,20 @@ function draw() {
 
   background(drawingState.background);
 
-  const visibleLogos = drawingState.logos.map((logo, index) => (
-    playing || exporting ? logo : movingLogo(index, logo)
-  ));
-  const drawingGrid = viewGridMetrics({ ...drawingState, logos: visibleLogos });
+  const visibleLogos = drawingState.logos.flatMap((logo, index) => {
+    if (playing || exporting) return [logo];
+    const visibleLogo = movingLogo(index, logo);
+    const exitingLogo = movingEnvelopeExit(index);
+    return exitingLogo ? [visibleLogo, exitingLogo] : [visibleLogo];
+  });
+  // Envelope moves temporarily draw both an outgoing and incoming pose. Keep
+  // the grid anchored to the logical layout instead of letting that extra pose
+  // change the two-logo half-cell offset.
+  const drawingGrid = viewGridMetrics({
+    ...drawingState,
+    logos: visibleLogos,
+    viewOffset: drawingState.viewOffset || logoGridOffset(drawingState)
+  });
 
   if (drawingState.showGrid && !exporting && !exportingPNG) {
     drawGrid(drawingGrid, drawingState.foreground);
@@ -177,7 +214,6 @@ function draw() {
 
 function zoomLevels() {
   const gutter = 10 / 64;
-  const minimumColumns = ceil(((width / 400 + gutter) / (1 + gutter)) / 2) * 2;
   const maximumColumns = floor(((width / 32 + gutter) / (1 + gutter)) / 2) * 2;
   const levels = [];
 
@@ -186,7 +222,7 @@ function zoomLevels() {
   // The extra pitch makes the visible column count odd, so a centred pattern
   // starts and ends with full cells instead of two clipped half-cells.
   // Only the resulting pixel size is stored in state/keyframes, never this index.
-  for (let columns = maximumColumns; columns >= minimumColumns; columns -= 2) {
+  for (let columns = maximumColumns; columns >= 0; columns -= 2) {
     const visibleColumns = columns + 1;
     levels.push(width / (visibleColumns * (1 + gutter) - gutter));
   }
@@ -251,6 +287,10 @@ function remapLogoBetweenGrids(logo, fromGrid, toGrid) {
 }
 
 function logoGridOffset(source) {
+  if (
+    source.mode === 'logo' && source.logoVariant === 'text' &&
+    source.textRepeat === false && textCharacters(source).length % 2 === 0
+  ) return { x: 0.5, y: 0 };
   if (source.mode !== 'logo' || source.logos.length !== 2) return { x: 0, y: 0 };
   return source.logoLayout === 'vertical' ? { x: 0, y: 0.5 } : { x: 0.5, y: 0 };
 }
@@ -325,25 +365,31 @@ function drawGrid(grid, gridColor) {
 }
 
 function drawLogo(logo, drawingState, grid, logoIndex) {
-  const length = grid.cell;
+  const length = grid.cell * (logo.renderScale || 1);
   const center = cellCenter(logo.col, logo.row, grid);
   const x = center.x;
   const y = center.y;
+  const logoVariant = logo.styleVariant || (drawingState.logoVariant === 'vary'
+    ? (logo.variant || noiseVariantFor(round(logo.col), round(logo.row), 0, logoIndex))
+    : drawingState.logoVariant);
 
   push();
   applyLogoEnvelope(logo.transitionEnvelope, grid);
   translate(x, y);
-  rotate(radians(logo.rotation));
-
-  const logoVariant = drawingState.logoVariant === 'vary'
-    ? (logo.variant || noiseVariantFor(round(logo.col), round(logo.row), 0, logoIndex))
-    : drawingState.logoVariant;
+  if (logoVariant !== 'text') {
+    rotate(radians(logo.rotation));
+  } else if (drawingState.mode === 'noise') {
+    rotate(radians(logo.rotation));
+  } else if (Number.isFinite(logo.textRotation)) {
+    rotate(radians(logo.textRotation));
+  }
 
   if (logoVariant === 'text') {
     drawTextLogo(
       drawingState,
       logo.glyphIndex ?? logoIndex,
-      length
+      length,
+      logo.textCharacter
     );
   } else {
     const logoImage = renderedLogo(
@@ -404,10 +450,102 @@ function applyLogoEnvelope(envelope, grid) {
   context.clip();
 }
 
-function drawTextLogo(drawingState, logoIndex, size) {
-  const content = drawingState.logoText || 'NOORDZUID';
-  const characters = Array.from(content.replace(/\s/g, ''));
-  const character = characters[logoIndex % max(1, characters.length)] || 'N';
+function textCharacters(source) {
+  const characters = Array.from(source.logoText ?? 'NOORDZUID');
+  return characters.length ? characters : [''];
+}
+
+function textCharacterAt(source, logoIndex) {
+  const characters = textCharacters(source);
+  if (source.textRepeat === false) {
+    return source.logos[logoIndex]?.textCharacter ?? '';
+  }
+  return characters[logoIndex % characters.length];
+}
+
+function assignTextCharacters(source, logos, grid = gridMetrics(source.gridSize)) {
+  logos.forEach(logo => { delete logo.textCharacter; });
+  if (source.logoVariant !== 'text' || source.textRepeat !== false) return logos;
+
+  const characters = textCharacters(source);
+  const view = viewGridMetrics({ ...source, logos, viewFocus: 0 });
+  const visible = logos.map((logo, index) => ({
+    index,
+    logo,
+    center: cellCenter(logo.col, logo.row, view)
+  })).filter(({ center }) => (
+    center.x >= 0 && center.x <= width && center.y >= 0 && center.y <= height
+  ));
+  const amount = min(characters.length, visible.length);
+  if (!amount) return logos;
+
+  const centerCol = (grid.cols - 1) / 2;
+  const centerRow = (grid.rows - 1) / 2;
+  const rows = new Map();
+  visible.forEach(item => {
+    const row = round(item.logo.row);
+    if (!rows.has(row)) rows.set(row, []);
+    rows.get(row).push(item);
+  });
+  const fittingRows = [...rows.entries()]
+    .filter(([, items]) => items.length >= amount)
+    .sort((a, b) => abs(a[0] - centerRow) - abs(b[0] - centerRow));
+
+  let selected;
+  if (fittingRows.length) {
+    selected = fittingRows[0][1]
+      .sort((a, b) => abs(a.logo.col - centerCol) - abs(b.logo.col - centerCol))
+      .slice(0, amount)
+      .sort((a, b) => a.logo.col - b.logo.col);
+  } else {
+    selected = [...visible]
+      .sort((a, b) => {
+        const distanceA = sq(a.logo.col - centerCol) + sq(a.logo.row - centerRow);
+        const distanceB = sq(b.logo.col - centerCol) + sq(b.logo.row - centerRow);
+        return distanceA - distanceB;
+      })
+      .slice(0, amount)
+      .sort((a, b) => a.logo.row - b.logo.row || a.logo.col - b.logo.col);
+  }
+
+  selected.forEach((item, index) => {
+    logos[item.index].textCharacter = characters[index];
+  });
+  return logos;
+}
+
+function logosShareContent(from, to, sourceIndex, targetIndex) {
+  const fromStyle = from.logoVariant || 'original';
+  const toStyle = to.logoVariant || 'original';
+  if (fromStyle !== toStyle) return false;
+  if (fromStyle === 'vary') {
+    return (from.logos[sourceIndex]?.variant || 'original') ===
+      (to.logos[targetIndex]?.variant || 'original');
+  }
+  if (fromStyle === 'text') {
+    return textCharacterAt(from, sourceIndex) === textCharacterAt(to, targetIndex);
+  }
+  return true;
+}
+
+function logoStyleAt(source, logoIndex) {
+  const style = source.logoVariant || 'original';
+  return style === 'vary'
+    ? (source.logos[logoIndex]?.variant || 'original')
+    : style;
+}
+
+function logosExactlyMatch(from, to, sourceIndex, targetIndex) {
+  return logosShareContent(from, to, sourceIndex, targetIndex);
+}
+
+function preloadTextGlyphs(content) {
+  const characters = Array.from(content ?? '');
+  [...new Set(characters)].forEach(character => renderedTextGlyph(character));
+}
+
+function drawTextLogo(drawingState, logoIndex, size, characterOverride) {
+  const character = characterOverride ?? textCharacterAt(drawingState, logoIndex);
   const glyph = renderedTextGlyph(character);
 
   push();
@@ -433,6 +571,7 @@ function renderedTextGlyph(character) {
   const bufferSize = 512;
   const measureSize = 100;
   const buffer = createGraphics(bufferSize, bufferSize);
+  buffer.pixelDensity(1);
   buffer.clear();
   buffer.noStroke();
   buffer.fill(255);
@@ -440,21 +579,27 @@ function renderedTextGlyph(character) {
   buffer.textStyle(NORMAL);
   buffer.textSize(measureSize);
 
+  // Use one shared font size based on the widest reference glyph. Individual
+  // letters keep their natural width instead of each being stretched to fill
+  // the square cell independently.
+  const reference = buffer.drawingContext.measureText('W');
+  const referenceWidth = Number.isFinite(reference.actualBoundingBoxLeft) &&
+    Number.isFinite(reference.actualBoundingBoxRight)
+    ? reference.actualBoundingBoxLeft + reference.actualBoundingBoxRight
+    : buffer.textWidth('W');
+  const referenceHeight = Number.isFinite(reference.actualBoundingBoxAscent) &&
+    Number.isFinite(reference.actualBoundingBoxDescent)
+    ? reference.actualBoundingBoxAscent + reference.actualBoundingBoxDescent
+    : buffer.textAscent() + buffer.textDescent();
+  const fittedSize = measureSize * (bufferSize * 0.9) /
+    max(referenceWidth, referenceHeight, 1);
+
+  buffer.textSize(fittedSize);
   let metrics = buffer.drawingContext.measureText(character);
   const hasExactBounds = Number.isFinite(metrics.actualBoundingBoxLeft) &&
     Number.isFinite(metrics.actualBoundingBoxRight) &&
     Number.isFinite(metrics.actualBoundingBoxAscent) &&
     Number.isFinite(metrics.actualBoundingBoxDescent);
-  const measuredWidth = hasExactBounds
-    ? metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight
-    : buffer.textWidth(character);
-  const measuredHeight = hasExactBounds
-    ? metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
-    : buffer.textAscent() + buffer.textDescent();
-  const fittedSize = measureSize * (bufferSize * 0.96) /
-    max(measuredWidth, measuredHeight, 1);
-
-  buffer.textSize(fittedSize);
   if (hasExactBounds) {
     buffer.textAlign(LEFT, BASELINE);
     metrics = buffer.drawingContext.measureText(character);
@@ -470,6 +615,45 @@ function renderedTextGlyph(character) {
 
   textGlyphCache[cacheKey] = buffer;
   return buffer;
+}
+
+function glyphInkAmount(character) {
+  const cacheKey = `${character}-${pixelDensity()}`;
+  if (textGlyphInkCache[cacheKey] !== undefined) {
+    return textGlyphInkCache[cacheKey];
+  }
+  const glyph = renderedTextGlyph(character);
+  glyph.loadPixels();
+  let ink = 0;
+  for (let index = 3; index < glyph.pixels.length; index += 4) {
+    ink += glyph.pixels[index] / 255;
+  }
+  textGlyphInkCache[cacheKey] = ink;
+  return ink;
+}
+
+function textCharacterWeight(character) {
+  const cacheKey = `${character}-${pixelDensity()}`;
+  if (textGlyphWeightCache[cacheKey] !== undefined) {
+    return textGlyphWeightCache[cacheKey];
+  }
+
+  const ink = glyphInkAmount(character);
+  const referenceInk = max(1, glyphInkAmount('W'));
+  // Calibrated so a full capital W is about 80 and a small punctuation mark
+  // lands around 10. Blank characters still exist in the simulation, but are
+  // intentionally almost weightless.
+  const weight = ink <= 0
+    ? 1
+    : round(constrain(8 + 72 * ink / referenceInk, 1, 100));
+  textGlyphWeightCache[cacheKey] = weight;
+  return weight;
+}
+
+function fallWeight(source, logoIndex) {
+  return logoStyleAt(source, logoIndex) === 'text'
+    ? textCharacterWeight(textCharacterAt(source, logoIndex))
+    : 60;
 }
 
 function renderedLogo(variantId, foreground, size) {
@@ -513,6 +697,8 @@ function clearLogoRenderCache() {
   logoRenderCache = {};
   Object.values(textGlyphCache).forEach(buffer => buffer.remove());
   textGlyphCache = {};
+  textGlyphInkCache = {};
+  textGlyphWeightCache = {};
 }
 
 function drawSelectionIndicator(logo, grid) {
@@ -629,22 +815,75 @@ function mousePressed(event) {
 function rollLogo(index, targetCol, targetRow) {
   const from = { ...state.logos[index] };
   const blocked = state.logos.filter((logo, logoIndex) => logoIndex !== index);
-  const path = buildRollPath(from, targetCol, targetRow, gridMetrics(state.gridSize), blocked);
-
-  if (!path.length) {
-    showStatus('Geen vrije route naar deze cel');
+  if (blocked.some(logo => logo.col === targetCol && logo.row === targetRow)) {
+    showStatus('Deze cel is al bezet');
     return;
   }
+  if (from.col === targetCol && from.row === targetRow) return;
 
-  const to = path[path.length - 1];
+  const distance = abs(targetCol - from.col) + abs(targetRow - from.row);
+  const duration = timingFromControls().animationDuration;
+  let to;
 
-  if (from.col === to.col && from.row === to.row) return;
-
-  moves[index] = {
-    path,
-    start: millis(),
-    duration: timingFromControls().animationDuration
-  };
+  if (distance === 1) {
+    to = {
+      ...from,
+      col: targetCol,
+      row: targetRow,
+      rotation: from.rotation + anchoredTurn(from, { col: targetCol, row: targetRow })
+    };
+    moves[index] = {
+      kind: 'step',
+      from,
+      to,
+      path: [{ ...from }, { ...to }],
+      start: millis(),
+      duration
+    };
+  } else {
+    const direction = ENVELOPE_DIRECTION;
+    to = {
+      ...from,
+      col: targetCol,
+      row: targetRow,
+      rotation: cellRotation(targetCol, targetRow, from.rotation)
+    };
+    const exitTarget = {
+      col: from.col + direction.col,
+      row: from.row + direction.row
+    };
+    const enterStart = {
+      col: to.col - direction.col,
+      row: to.row - direction.row
+    };
+    moves[index] = {
+      kind: 'envelope',
+      from,
+      to,
+      exitPath: [{ ...from }, {
+        ...exitTarget,
+        rotation: from.rotation + anchoredTurn(from, exitTarget)
+      }],
+      enterPath: [{
+        ...enterStart,
+        rotation: to.rotation - anchoredTurn(enterStart, to)
+      }, { ...to }],
+      exitEnvelope: {
+        kind: 'exit',
+        col: from.col,
+        row: from.row,
+        direction
+      },
+      enterEnvelope: {
+        kind: 'enter',
+        col: to.col,
+        row: to.row,
+        direction
+      },
+      start: millis(),
+      duration
+    };
+  }
   if (state.logoVariant === 'vary') {
     moves[index].fromVariant = from.variant || noiseVariantFor(from.col, from.row, 0, index);
     to.variant = noiseVariantFor(to.col, to.row, 1, index);
@@ -667,10 +906,31 @@ function movingLogo(index, fallback) {
   }
 
   const raw = elapsed / move.duration;
+  if (move.kind === 'envelope') {
+    const visibleLogo = {
+      ...move.to,
+      ...rollPathPose(move.enterPath, raw, state.gridSize),
+      transitionEnvelope: move.enterEnvelope,
+      glyphIndex: index
+    };
+    visibleLogo.textRotation = visibleLogo.rotation - move.to.rotation;
+
+    if (move.fromVariant || move.toVariant) {
+      visibleLogo.variant = move.toVariant || move.fromVariant;
+    }
+    return visibleLogo;
+  }
+
   const visibleLogo = {
     ...fallback,
     ...rollPathPose(move.path, raw, state.gridSize)
   };
+  if (move.kind === 'step' && state.logoVariant === 'text' && state.mode !== 'noise') {
+    const totalTurn = move.path[move.path.length - 1].rotation - move.path[0].rotation;
+    visibleLogo.textRotation = sin(PI * raw) * totalTurn;
+  } else {
+    visibleLogo.textRotation = visibleLogo.rotation - move.path[0].rotation;
+  }
 
   if (move.fromVariant || move.toVariant) {
     visibleLogo.variant = raw < 0.5
@@ -678,6 +938,26 @@ function movingLogo(index, fallback) {
       : (move.toVariant || move.fromVariant);
   }
 
+  return visibleLogo;
+}
+
+function movingEnvelopeExit(index) {
+  const move = moves[index];
+  if (!move || move.kind !== 'envelope') return null;
+
+  const raw = constrain((millis() - move.start) / move.duration, 0, 1);
+  if (raw >= 1) return null;
+
+  const visibleLogo = {
+    ...move.from,
+    ...rollPathPose(move.exitPath, raw, state.gridSize),
+    transitionEnvelope: move.exitEnvelope,
+    glyphIndex: index
+  };
+  visibleLogo.textRotation = visibleLogo.rotation - move.from.rotation;
+  if (move.fromVariant || move.toVariant) {
+    visibleLogo.variant = move.fromVariant || move.toVariant;
+  }
   return visibleLogo;
 }
 
@@ -888,16 +1168,46 @@ function connectControls() {
   logoVariantControl.addEventListener('change', event => {
     state.logoVariant = event.target.value;
     if (state.logoVariant === 'vary') applyNoiseStyles();
+    if (state.logoVariant === 'text' && state.mode === 'noise') {
+      state.logos.forEach(logo => { logo.rotation = 0; });
+      moves = {};
+      nextNoiseMoveAt = millis() + 250;
+    }
+    if (state.logoVariant === 'text') preloadTextGlyphs(state.logoText);
+    if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
+      applyLogoPreset();
+    } else {
+      assignTextCharacters(state, state.logos);
+    }
     updateTextControls();
     autoUpdateKeyframe();
   });
   document.getElementById('logo-text').addEventListener('input', event => {
     state.logoText = event.target.value;
+    preloadTextGlyphs(state.logoText);
+    if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
+      applyLogoPreset();
+    } else {
+      assignTextCharacters(state, state.logos);
+    }
+    autoUpdateKeyframe();
+  });
+  document.getElementById('text-once').addEventListener('change', event => {
+    state.textRepeat = !event.target.checked;
+    if (state.mode === 'logo') applyLogoPreset();
+    else assignTextCharacters(state, state.logos);
+    if (isFalling(state)) resetFallBodies();
     autoUpdateKeyframe();
   });
 
   modeControl.addEventListener('change', event => {
     setMode(event.target.value);
+    if (isFalling(state)) {
+      // The newly selected mode/layout is now the state to restore when Fall
+      // is switched off; do not keep the snapshot from when Fall began.
+      state.preFallLogos = state.logos.map(logo => ({ ...logo }));
+      fallResume = null;
+    }
     autoUpdateKeyframe({ preserveFallLayout: false });
   });
 
@@ -979,6 +1289,10 @@ function connectControls() {
   });
   document.getElementById('fall').addEventListener('change', event => {
     const fallen = cloneState(state);
+    const departingBodies = fallBodies.map(body => ({
+      ...body,
+      bounds: { ...body.bounds }
+    }));
     liveFallReturn = null;
     state.fall = event.target.checked;
     if (state.fall) {
@@ -995,6 +1309,8 @@ function connectControls() {
       liveFallReturn = {
         source: fallen,
         items: fallReturnItems(fallen, state),
+        bodies: departingBodies.length ? departingBodies : createFallBodies(fallen),
+        lastFallUpdate: millis(),
         start: millis(),
         duration: timingFromControls().animationDuration
       };
@@ -1056,7 +1372,7 @@ function patternLogosFor(source, grid, previousLogos = []) {
     [`${round(logo.col)},${round(logo.row)}`, logo.variant]
   )));
 
-  return patternCells(source.pattern || 'alternating', grid).map((cell, index) => {
+  const logos = patternCells(source.pattern || 'alternating', grid).map((cell, index) => {
     const logo = {
       col: cell.col,
       row: cell.row,
@@ -1069,6 +1385,7 @@ function patternLogosFor(source, grid, previousLogos = []) {
     }
     return logo;
   });
+  return assignTextCharacters(source, logos, grid);
 }
 
 function setMode(mode) {
@@ -1155,12 +1472,14 @@ function noiseLogosFor(
     ? retained.sort((a, b) => b.score - a.score).slice(0, amount)
     : retained.concat(additions.slice(0, amount - retained.length));
 
-  return selected.map(({ col, row }, index) => {
+  const logos = selected.map(({ col, row }, index) => {
     const previous = previousByCell.get(`${col},${row}`);
     return {
       col,
       row,
-      rotation: previous?.rotation ?? cellRotation(col, row, 0, source.gridPhase || 0),
+      rotation: previous?.rotation ?? (source.logoVariant === 'text'
+        ? 0
+        : cellRotation(col, row, 0, source.gridPhase || 0)),
       ...(source.logoVariant === 'vary'
         ? {
             variant: previous?.variant || noiseVariantFor(
@@ -1173,6 +1492,7 @@ function noiseLogosFor(
         : {})
     };
   });
+  return assignTextCharacters(source, logos, grid);
 }
 
 function applyNoiseStep() {
@@ -1371,40 +1691,94 @@ function isFalling(source = state) {
   return Boolean(source.fall) || source.mode === 'fall';
 }
 
-function resetFallBodies(sourceState = state) {
+function createFallBodies(sourceState = state) {
   const grid = gridMetrics(sourceState.gridSize);
   const view = viewGridMetrics(sourceState);
   const viewportLeft = grid.left - view.left;
   const viewportTop = grid.top - view.top;
+  const bounds = {
+    left: viewportLeft,
+    right: viewportLeft + width,
+    top: viewportTop,
+    bottom: viewportTop + height
+  };
 
-  fallBodies = sourceState.logos.map((logo, index) => {
+  if (sourceState.logoVariant === 'text' && sourceState.textRepeat === false) {
+    const characters = textCharacters(sourceState);
+    const fittedCell = min(
+      grid.cell,
+      width / max(1, characters.length * 1.25),
+      height * 0.35
+    );
+    const renderScale = fittedCell / grid.cell;
+    const fittedPitch = fittedCell * (1 + 10 / 64);
+    return characters.map((character, index) => {
+      const weight = textCharacterWeight(character);
+      const x = viewportLeft + width / 2 +
+        (index - (characters.length - 1) / 2) * fittedPitch;
+      const y = viewportTop + height / 2;
+      const extent = fittedCell * 0.5 + 3;
+      return {
+        x: constrain(x, bounds.left + extent, bounds.right - extent),
+        y: constrain(y, bounds.top + extent, bounds.bottom - extent),
+        vx: sin((index + 1) * 2.17) * 18 * (1.15 - weight / 150),
+        vy: 0,
+        rotation: 0,
+        angularVelocity: sin((index + 1) * 1.37) * 4,
+        weight,
+        glyphIndex: index,
+        textCharacter: character,
+        styleVariant: 'text',
+        renderScale,
+        collisionRadius: fittedCell * 0.46,
+        bounds: { ...bounds }
+      };
+    });
+  }
+
+  return sourceState.logos.map((logo, index) => {
     const center = cellCenter(logo.col, logo.row, grid);
+    return { logo, index, center };
+  }).filter(({ center }) => (
+    // Procedural grids include fully off-canvas edge cells so zooming remains
+    // centred. They must not be clamped into view when physics starts, or a
+    // seven-line pattern visibly grows to nine lines.
+    center.x >= viewportLeft && center.x <= viewportLeft + width &&
+    center.y >= viewportTop && center.y <= viewportTop + height
+  )).map(({ logo, index, center }) => {
     const angle = radians(logo.rotation);
-    const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + 3;
+    const renderScale = logo.renderScale || 1;
+    const extent = grid.cell * renderScale * 0.5 *
+      (abs(cos(angle)) + abs(sin(angle))) + 3;
+    const weight = fallWeight(sourceState, index);
     return {
-      x: center.x,
-      y: center.y,
-      vx: sin((index + 1) * 2.17) * 18,
+      x: constrain(center.x, bounds.left + extent, bounds.right - extent),
+      y: constrain(center.y, bounds.top + extent, bounds.bottom - extent),
+      vx: sin((index + 1) * 2.17) * 18 * (1.15 - weight / 150),
       vy: 0,
       rotation: logo.rotation,
       angularVelocity: sin((index + 1) * 1.37) * 4,
+      weight,
       variant: logo.variant,
-      glyphIndex: logo.glyphIndex,
-      bounds: {
-        left: min(viewportLeft, center.x - extent),
-        right: max(viewportLeft + width, center.x + extent),
-        top: min(viewportTop, center.y - extent),
-        bottom: max(viewportTop + height, center.y + extent)
-      }
+      glyphIndex: logo.glyphIndex ?? index,
+      textCharacter: logo.textCharacter,
+      styleVariant: logo.styleVariant,
+      renderScale,
+      collisionRadius: grid.cell * renderScale * 0.46,
+      bounds: { ...bounds }
     };
   });
+}
+
+function resetFallBodies(sourceState = state) {
+  fallBodies = createFallBodies(sourceState);
   lastFallUpdate = millis();
 }
 
 function updateFallMotion() {
   if (!isFalling(state) || playing || exporting || exportingPNG) return;
 
-  if (fallBodies.length !== state.logos.length) resetFallBodies();
+  if (!fallBodies.length && state.logos.length) resetFallBodies();
   if (!fallBodies.length) return;
 
   state.logos = stepFallBodies(state);
@@ -1417,6 +1791,13 @@ function playbackFallState(drawingState) {
   if (!playbackFallActive) {
     resetFallBodies(drawingState);
     playbackFallActive = true;
+    playbackFallLayoutKey = fallLayoutKey(drawingState);
+  } else {
+    const nextLayoutKey = fallLayoutKey(drawingState);
+    if (nextLayoutKey !== playbackFallLayoutKey) {
+      reconcileFallBodies(drawingState);
+      playbackFallLayoutKey = nextLayoutKey;
+    }
   }
 
   lastPlaybackFallState = {
@@ -1426,12 +1807,58 @@ function playbackFallState(drawingState) {
   return lastPlaybackFallState;
 }
 
-function stepFallBodies(sourceState) {
-  if (!fallBodies.length) return [];
+function fallLayoutKey(source) {
+  return JSON.stringify([
+    source.mode,
+    source.pattern,
+    source.logoLayout,
+    source.logoVariant,
+    source.logoText,
+    source.textRepeat,
+    source.logos.length
+  ]);
+}
+
+function reconcileFallBodies(sourceState) {
+  const desiredBodies = createFallBodies(sourceState);
+  const desiredCount = desiredBodies.length;
+
+  if (desiredCount < fallBodies.length) {
+    const previousBodies = fallBodies;
+    fallBodies = Array.from({ length: desiredCount }, (_, index) => (
+      previousBodies[min(
+        previousBodies.length - 1,
+        floor(index * previousBodies.length / max(1, desiredCount))
+      )]
+    ));
+  } else if (desiredCount > fallBodies.length) {
+    fallBodies.push(...desiredBodies.slice(fallBodies.length));
+  }
+
+  fallBodies.forEach((body, index) => {
+    const desired = desiredBodies[index];
+    if (!desired) return;
+    body.weight = desired.weight;
+    body.variant = desired.variant;
+    body.glyphIndex = desired.glyphIndex;
+    body.textCharacter = desired.textCharacter;
+    body.styleVariant = desired.styleVariant;
+    body.renderScale = desired.renderScale;
+    body.collisionRadius = desired.collisionRadius;
+  });
+}
+
+function stepFallBodies(sourceState, options = {}) {
+  const bodies = options.bodies || fallBodies;
+  if (!bodies.length) return [];
 
   const now = millis();
-  const elapsed = constrain((now - lastFallUpdate) / 1000, 0, 0.04);
-  lastFallUpdate = now;
+  const previousUpdate = options.clock
+    ? (options.clock.lastFallUpdate ?? now)
+    : lastFallUpdate;
+  const elapsed = constrain((now - previousUpdate) / 1000, 0, 0.04);
+  if (options.clock) options.clock.lastFallUpdate = now;
+  else lastFallUpdate = now;
   const grid = gridMetrics(sourceState.gridSize);
   const view = viewGridMetrics(sourceState);
   const viewportLeft = grid.left - view.left;
@@ -1441,20 +1868,23 @@ function stepFallBodies(sourceState) {
   const dt = elapsed / steps;
 
   for (let step = 0; elapsed > 0 && step < steps; step++) {
-    fallBodies.forEach(body => {
-      body.vy += 980 * dt;
+    bodies.forEach(body => {
+      const gravityScale = 0.35 + 1.05 * body.weight / 100;
+      body.vy += 980 * gravityScale * dt;
       body.x += body.vx * dt;
       body.y += body.vy * dt;
       body.rotation += body.angularVelocity * dt;
 
       const angle = radians(body.rotation);
-      const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
+      const bodySize = grid.cell * (body.renderScale || 1);
+      const extent = bodySize * 0.5 *
+        (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
 
       const bounds = body.bounds;
-      if (body.x - extent >= viewportLeft) bounds.left = viewportLeft;
-      if (body.x + extent <= viewportLeft + width) bounds.right = viewportLeft + width;
-      if (body.y - extent >= viewportTop) bounds.top = viewportTop;
-      if (body.y + extent <= viewportTop + height) bounds.bottom = viewportTop + height;
+      bounds.left = viewportLeft;
+      bounds.right = viewportLeft + width;
+      bounds.top = viewportTop;
+      bounds.bottom = viewportTop + height;
       if (body.x - extent < bounds.left) {
         body.x = bounds.left + extent;
         body.vx = abs(body.vx) * 0.42;
@@ -1468,75 +1898,108 @@ function stepFallBodies(sourceState) {
       if (body.y - extent < bounds.top) {
         body.y = bounds.top + extent;
         body.vy = max(0, body.vy);
-      } else if (body.y + extent > bounds.bottom) {
+      } else if (!options.allowBottomExit && body.y + extent > bounds.bottom) {
         body.y = bounds.bottom - extent;
-        body.vy = 0;
-        body.vx *= 0.9;
-        body.angularVelocity *= 0.7;
+        const impact = abs(body.vy);
+        const restitution = lerp(0.3, 0.12, body.weight / 100);
+        body.vy = impact > 35 ? -impact * restitution : 0;
+        body.vx *= 0.88;
+        body.angularVelocity *= 0.68;
       }
 
       body.angularVelocity = constrain(body.angularVelocity, -10, 10);
     });
 
-    resolveFallCollisions(grid.cell * 0.46, collisionPadding);
-    fallBodies.forEach(body => {
+    resolveFallCollisions(bodies, grid.cell * 0.46, collisionPadding);
+    bodies.forEach(body => {
       const angle = radians(body.rotation);
-      const extent = grid.cell * 0.5 * (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
+      const bodySize = grid.cell * (body.renderScale || 1);
+      const extent = bodySize * 0.5 *
+        (abs(cos(angle)) + abs(sin(angle))) + collisionPadding;
       body.x = constrain(body.x, body.bounds.left + extent, body.bounds.right - extent);
-      body.y = constrain(body.y, body.bounds.top + extent, body.bounds.bottom - extent);
+      body.y = options.allowBottomExit
+        ? max(body.y, body.bounds.top + extent)
+        : constrain(body.y, body.bounds.top + extent, body.bounds.bottom - extent);
     });
   }
 
-  return fallBodies.map(body => ({
+  return bodies.map(body => ({
     ...canvasPointToLogo({ x: body.x, y: body.y }, body.rotation, grid),
     variant: body.variant,
-    glyphIndex: body.glyphIndex
+    glyphIndex: body.glyphIndex,
+    textCharacter: body.textCharacter,
+    styleVariant: body.styleVariant,
+    renderScale: body.renderScale
   }));
 }
 
-function resolveFallCollisions(radius, padding) {
-  for (let firstIndex = 0; firstIndex < fallBodies.length; firstIndex++) {
-    for (let secondIndex = firstIndex + 1; secondIndex < fallBodies.length; secondIndex++) {
-      const first = fallBodies[firstIndex];
-      const second = fallBodies[secondIndex];
+function resolveFallCollisions(bodies, radius, padding) {
+  for (let firstIndex = 0; firstIndex < bodies.length; firstIndex++) {
+    for (let secondIndex = firstIndex + 1; secondIndex < bodies.length; secondIndex++) {
+      const first = bodies[firstIndex];
+      const second = bodies[secondIndex];
       const dx = second.x - first.x;
       const dy = second.y - first.y;
       const distance = max(0.001, sqrt(dx * dx + dy * dy));
-      const overlap = radius * 2 + padding - distance;
+      const firstRadius = first.collisionRadius || radius;
+      const secondRadius = second.collisionRadius || radius;
+      const overlap = firstRadius + secondRadius + padding - distance;
       if (overlap <= 0) continue;
 
       const nx = dx / distance;
       const ny = dy / distance;
-      first.x -= nx * overlap * 0.5;
-      first.y -= ny * overlap * 0.5;
-      second.x += nx * overlap * 0.5;
-      second.y += ny * overlap * 0.5;
+      const firstInverseMass = 1 / max(1, first.weight);
+      const secondInverseMass = 1 / max(1, second.weight);
+      const inverseMassTotal = firstInverseMass + secondInverseMass;
+      const firstShare = firstInverseMass / inverseMassTotal;
+      const secondShare = secondInverseMass / inverseMassTotal;
+      first.x -= nx * overlap * firstShare;
+      first.y -= ny * overlap * firstShare;
+      second.x += nx * overlap * secondShare;
+      second.y += ny * overlap * secondShare;
 
       const relativeVelocity = (second.vx - first.vx) * nx + (second.vy - first.vy) * ny;
       if (relativeVelocity >= 0) continue;
 
-      const impulse = -relativeVelocity * 0.5;
-      first.vx -= nx * impulse;
-      first.vy = max(0, first.vy - ny * impulse);
-      second.vx += nx * impulse;
-      second.vy = max(0, second.vy + ny * impulse);
+      const restitution = 0.2;
+      const impulse = -(1 + restitution) * relativeVelocity / inverseMassTotal;
+      first.vx -= nx * impulse * firstInverseMass;
+      first.vy -= ny * impulse * firstInverseMass;
+      second.vx += nx * impulse * secondInverseMass;
+      second.vy += ny * impulse * secondInverseMass;
       const spin = nx * impulse * 0.018;
-      first.angularVelocity = constrain(first.angularVelocity - spin, -10, 10);
-      second.angularVelocity = constrain(second.angularVelocity + spin, -10, 10);
+      first.angularVelocity = constrain(
+        first.angularVelocity - spin * firstInverseMass,
+        -10,
+        10
+      );
+      second.angularVelocity = constrain(
+        second.angularVelocity + spin * secondInverseMass,
+        -10,
+        10
+      );
     }
   }
 }
 
 function applyLogoPreset() {
   const layout = state.logoLayout || 'horizontal';
-  const amount = layout === 'single' ? 1 : 2;
+  const oneTimeText = state.logoVariant === 'text' && state.textRepeat === false;
+  const amount = oneTimeText
+    ? textCharacters(state).length
+    : layout === 'single' ? 1 : 2;
   const grid = gridMetrics(state.gridSize);
   const centerCol = floor(grid.cols / 2);
   const centerRow = floor(grid.rows / 2);
 
   state.mode = 'logo';
   state.logoLayout = layout;
-  state.logos = amount === 1
+  state.logos = oneTimeText
+    ? Array.from({ length: amount }, (_, index) => {
+        const col = centerCol - floor(amount / 2) + index;
+        return { col, row: centerRow, rotation: cellRotation(col, centerRow) };
+      })
+    : amount === 1
     ? [{ col: centerCol, row: centerRow, rotation: cellRotation(centerCol, centerRow) }]
     : layout === 'vertical'
       ? [
@@ -1547,6 +2010,7 @@ function applyLogoPreset() {
           { col: centerCol - 1, row: centerRow, rotation: cellRotation(centerCol - 1, centerRow) },
           { col: centerCol, row: centerRow, rotation: cellRotation(centerCol, centerRow) }
         ];
+  assignTextCharacters(state, state.logos, grid);
 
   selectedLogo = 0;
   moves = {};
@@ -1739,9 +2203,18 @@ function modeLabel(mode) {
 }
 
 function loadKeyframe() {
-  selectedKeyframe = Number(document.getElementById('keyframe-list').value || selectedKeyframe);
-  if (!keyframes[selectedKeyframe]) return;
+  const source = cloneState(state);
+  const targetIndex = Number(document.getElementById('keyframe-list').value || selectedKeyframe);
+  if (!keyframes[targetIndex]) return;
+  selectedKeyframe = targetIndex;
   state = cloneState(keyframes[selectedKeyframe]);
+  const previewDuration = keyframeAnimationDuration(selectedKeyframe);
+  keyframePreviewTransition = {
+    source: { ...source, duration: 100, animationDuration: 100 },
+    target: keyframes[selectedKeyframe],
+    start: millis(),
+    duration: previewDuration
+  };
   fallResume = null;
   liveFallReturn = null;
   lastPlaybackFallState = null;
@@ -1754,6 +2227,18 @@ function loadKeyframe() {
   syncControls();
 }
 
+function keyframePreviewState(elapsed) {
+  const preview = keyframePreviewTransition;
+  if (!preview) return state;
+  const savedKeyframes = keyframes;
+  keyframes = [preview.source, preview.target];
+  try {
+    return playbackState(100 + min(elapsed, preview.duration));
+  } finally {
+    keyframes = savedKeyframes;
+  }
+}
+
 function syncControls() {
   document.getElementById('mode').value = state.mode || 'pattern';
   syncOptionButtons();
@@ -1762,6 +2247,7 @@ function syncControls() {
   document.getElementById('focus-logo').checked = Boolean(state.focusOnLogo);
   document.getElementById('logo-variant').value = state.logoVariant || 'original';
   document.getElementById('logo-text').value = state.logoText || 'NOORDZUID';
+  document.getElementById('text-once').checked = state.textRepeat === false;
   document.getElementById('fall').checked = isFalling(state);
   document.getElementById('duration').value = keyframeDuration(selectedKeyframe);
   document.getElementById('animation-duration').value = keyframeAnimationDuration(selectedKeyframe);
@@ -1780,9 +2266,11 @@ function togglePlayback() {
   if (!keyframes.length) return;
 
   liveFallReturn = null;
+  keyframePreviewTransition = null;
   lastPlaybackFallState = null;
   fallReturnTransition = null;
   playbackFallActive = false;
+  playbackFallLayoutKey = null;
 
   moves = {};
   playbackNoiseRuntime = null;
@@ -1799,6 +2287,7 @@ function stopPlayback() {
   fallReturnTransition = null;
   fallBodies = [];
   playbackFallActive = false;
+  playbackFallLayoutKey = null;
   playbackNoiseRuntime = null;
   playbackNoiseSources = {};
   document.getElementById('play').textContent = 'Play';
@@ -1857,20 +2346,18 @@ function transitionPlan(index, source = keyframes[index]) {
     rows: max(fromGrid.rows, toGrid.rows)
   };
 
-  // Only the dedicated logo mode keeps identities and follows longer routes.
-  // Fields instead change locally: one roll out for a removed mark and one
-  // roll in for a new mark. The cell edge masks the rest of that movement.
-  if (from.mode !== 'logo' || to.mode !== 'logo') {
-    return simpleEnvelopeTransitionPlan(
-      from,
-      to,
-      transitionGrid,
-      frameLength,
-      animationLength,
-      transitionStagger
-    );
-  }
+  // Every keyframe change uses the local envelope system. The planner keeps
+  // only exact matches still and reserves a direct roll for one-cell moves.
+  return simpleEnvelopeTransitionPlan(
+    from,
+    to,
+    transitionGrid,
+    frameLength,
+    animationLength,
+    transitionStagger
+  );
 
+  /* Legacy multi-cell logo routing is intentionally bypassed. */
   const positions = from.logos.map(logo => ({ ...logo }));
   const pairCandidates = [];
   const usedSources = new Set();
@@ -1885,7 +2372,8 @@ function transitionPlan(index, source = keyframes[index]) {
     const targetIndex = to.logos.findIndex((target, index) => {
       if (usedTargets.has(index)) return false;
       const targetCell = centeredGridCell(target, toGrid);
-      return targetCell.col === sourceCell.col && targetCell.row === sourceCell.row;
+      return targetCell.col === sourceCell.col && targetCell.row === sourceCell.row &&
+        logosShareContent(from, to, sourceIndex, index);
     });
     if (targetIndex < 0) return;
 
@@ -1904,6 +2392,7 @@ function transitionPlan(index, source = keyframes[index]) {
     if (usedSources.has(sourceIndex)) return;
     to.logos.forEach((target, targetIndex) => {
       if (usedTargets.has(targetIndex)) return;
+      if (!logosShareContent(from, to, sourceIndex, targetIndex)) return;
       pairCandidates.push({
         sourceIndex,
         targetIndex,
@@ -2010,38 +2499,125 @@ function simpleEnvelopeTransitionPlan(
   transitionStagger
 ) {
   const items = [];
+  const usedSources = new Set();
   const usedTargets = new Set();
   const fromGrid = gridMetrics(from.gridSize);
   const toGrid = gridMetrics(to.gridSize);
-  const targetByPosition = new Map();
 
-  to.logos.forEach((logo, index) => {
-    const position = centeredGridCell(logo, toGrid);
-    targetByPosition.set(`${position.col},${position.row}`, index);
-  });
-
-  // Absolute cell indices shift during a centred zoom. Match the stable
-  // centre-relative position so unchanged marks remain continuously visible.
+  // Keep only genuinely identical marks still. Centre-relative coordinates
+  // make this stable while the grid itself zooms.
   from.logos.forEach((logo, logoIndex) => {
     const sourceCell = centeredGridCell(logo, fromGrid);
-    const candidateIndex = targetByPosition.get(`${sourceCell.col},${sourceCell.row}`);
-    const targetIndex = candidateIndex !== undefined && !usedTargets.has(candidateIndex)
-      ? candidateIndex
-      : -1;
+    const targetIndex = to.logos.findIndex((target, index) => {
+      if (usedTargets.has(index)) return false;
+      const targetCell = centeredGridCell(target, toGrid);
+      return targetCell.col === sourceCell.col && targetCell.row === sourceCell.row &&
+        logosExactlyMatch(from, to, logoIndex, index);
+    });
+    if (targetIndex < 0) return;
 
-    if (targetIndex >= 0) {
+    // Identical content must not acquire a generated rotation merely because
+    // the grid or pattern was rebuilt for another keyframe.
+    to.logos[targetIndex].rotation = logo.rotation;
+    usedSources.add(logoIndex);
+    usedTargets.add(targetIndex);
+    items.push({
+      kind: 'hold',
+      logoIndex,
+      targetIndex,
+      path: [{ ...logo }],
+      weight: 0
+    });
+  });
+
+  // The logo preset has one deliberate exception to the envelope rule. When
+  // switching from side-by-side to stacked, the displaced mark follows the
+  // free corner around the held centre mark in exactly two quarter-turns.
+  if (
+    from.mode === 'logo' && to.mode === 'logo' &&
+    from.logoLayout === 'horizontal' && to.logoLayout === 'vertical'
+  ) {
+    from.logos.forEach((logo, logoIndex) => {
+      if (usedSources.has(logoIndex)) return;
+      const sourceCell = centeredGridCell(logo, fromGrid);
+      const targetIndex = to.logos.findIndex((target, index) => {
+        if (usedTargets.has(index)) return false;
+        if (!logosShareContent(from, to, logoIndex, index)) return false;
+        const targetCell = centeredGridCell(target, toGrid);
+        return abs(sourceCell.col - targetCell.col) +
+          abs(sourceCell.row - targetCell.row) === 2;
+      });
+      if (targetIndex < 0) return;
+
+      const target = to.logos[targetIndex];
+      const targetPosition = centeredGridPosition(target, toGrid);
+      const pathTarget = logoFromCenteredPosition(target, targetPosition, fromGrid);
+      const corner = {
+        ...logo,
+        row: pathTarget.row
+      };
+      corner.rotation = logo.rotation + anchoredTurn(logo, corner);
+      pathTarget.rotation = corner.rotation + anchoredTurn(corner, pathTarget);
+      to.logos[targetIndex].rotation = pathTarget.rotation;
+      usedSources.add(logoIndex);
       usedTargets.add(targetIndex);
       items.push({
-        kind: 'hold',
+        kind: 'route',
         logoIndex,
         targetIndex,
-        path: [{ ...logo }],
-        weight: 0
+        path: [{ ...logo }, corner, pathTarget],
+        weight: 2
       });
-      return;
-    }
+    });
+  }
 
-    const direction = outwardDirection(logo, grid);
+  // A matching mark exactly one cell away keeps its natural single roll.
+  // Longer moves deliberately become an envelope exit plus envelope entry.
+  const oneStepCandidates = [];
+  from.logos.forEach((logo, logoIndex) => {
+    if (usedSources.has(logoIndex)) return;
+    const sourceCell = centeredGridCell(logo, fromGrid);
+    to.logos.forEach((target, targetIndex) => {
+      if (usedTargets.has(targetIndex)) return;
+      if (!logosShareContent(from, to, logoIndex, targetIndex)) return;
+      const targetCell = centeredGridCell(target, toGrid);
+      const distance = abs(sourceCell.col - targetCell.col) +
+        abs(sourceCell.row - targetCell.row);
+      if (distance !== 1) return;
+      oneStepCandidates.push({
+        logoIndex,
+        targetIndex,
+        indexDistance: abs(logoIndex - targetIndex)
+      });
+    });
+  });
+
+  oneStepCandidates.sort((a, b) => a.indexDistance - b.indexDistance);
+  oneStepCandidates.forEach(({ logoIndex, targetIndex }) => {
+    if (usedSources.has(logoIndex) || usedTargets.has(targetIndex)) return;
+    const logo = from.logos[logoIndex];
+    const target = to.logos[targetIndex];
+    const targetPosition = centeredGridPosition(target, toGrid);
+    const pathTarget = logoFromCenteredPosition(target, targetPosition, fromGrid);
+    pathTarget.rotation = logo.rotation + anchoredTurn(logo, pathTarget);
+    // Preserve the completed physical roll in the target keyframe so playback
+    // and manual keyframe previews cannot snap to an older target rotation.
+    to.logos[targetIndex].rotation = pathTarget.rotation;
+    usedSources.add(logoIndex);
+    usedTargets.add(targetIndex);
+    items.push({
+      kind: 'step',
+      logoIndex,
+      targetIndex,
+      path: [{ ...logo }, pathTarget],
+      weight: 1
+    });
+  });
+
+  from.logos.forEach((logo, logoIndex) => {
+    if (usedSources.has(logoIndex)) return;
+
+    const direction = ENVELOPE_DIRECTION;
     const targetCell = {
       col: logo.col + direction.col,
       row: logo.row + direction.row
@@ -2066,14 +2642,10 @@ function simpleEnvelopeTransitionPlan(
   to.logos.forEach((logo, targetIndex) => {
     if (usedTargets.has(targetIndex)) return;
 
-    const outward = outwardDirection(logo, grid);
+    const direction = ENVELOPE_DIRECTION;
     const start = {
-      col: logo.col + outward.col,
-      row: logo.row + outward.row
-    };
-    const direction = {
-      col: logo.col - start.col,
-      row: logo.row - start.row
+      col: logo.col - direction.col,
+      row: logo.row - direction.row
     };
     items.push({
       kind: 'enter',
@@ -2194,7 +2766,7 @@ function scheduleRollRoutes(items, grid, animationLength, transitionStagger) {
 }
 
 function exitRollPath(logo, grid, phase = state.gridPhase || 0) {
-  const direction = outwardDirection(logo, grid);
+  const direction = ENVELOPE_DIRECTION;
   const path = [{ ...logo }];
   let current = { ...logo };
 
@@ -2228,68 +2800,16 @@ function enterRollPath(logo, grid, phase = state.gridPhase || 0) {
   return path;
 }
 
-function outwardDirection(logo, grid) {
-  const horizontalDistance = logo.col - (grid.cols - 1) / 2;
-  const verticalDistance = logo.row - (grid.rows - 1) / 2;
-
-  if (abs(horizontalDistance) >= abs(verticalDistance) && horizontalDistance !== 0) {
-    return { col: Math.sign(horizontalDistance), row: 0 };
-  }
-
-  if (verticalDistance !== 0) {
-    return { col: 0, row: Math.sign(verticalDistance) };
-  }
-
-  const quarter = ((round(logo.rotation / 90) % 4) + 4) % 4;
-  return [
-    { col: 1, row: 0 },
-    { col: 0, row: 1 },
-    { col: -1, row: 0 },
-    { col: 0, row: -1 }
-  ][quarter];
-}
-
-// A fall ends with the same one-roll envelope transition as other field
-// changes. Fallen marks roll behind their current envelope while the target
-// marks emerge from the incoming edge of their own cells.
-function fallReturnItems(source, target) {
-  const sourceGrid = gridMetrics(source.gridSize);
-  const targetGrid = gridMetrics(target.gridSize);
-  const grid = {
-    cols: max(sourceGrid.cols, targetGrid.cols),
-    rows: max(sourceGrid.rows, targetGrid.rows)
-  };
-  const items = source.logos.map((logo, logoIndex) => {
-    const direction = outwardDirection(logo, grid);
-    const destination = {
-      col: logo.col + direction.col,
-      row: logo.row + direction.row
-    };
-    return {
-      kind: 'exit',
-      logoIndex,
-      path: [{ ...logo }, {
-        ...destination,
-        rotation: logo.rotation + anchoredTurn(logo, destination)
-      }],
-      envelope: {
-        kind: 'exit',
-        col: logo.col,
-        row: logo.row,
-        direction
-      }
-    };
-  });
+// After fallen content has cleared the bottom edge, only the target marks use
+// the envelope transition. The fallen marks never roll back onto the grid.
+function fallReturnItems(_source, target) {
+  const items = [];
 
   target.logos.forEach((logo, targetIndex) => {
-    const outward = outwardDirection(logo, grid);
+    const direction = ENVELOPE_DIRECTION;
     const start = {
-      col: logo.col + outward.col,
-      row: logo.row + outward.row
-    };
-    const direction = {
-      col: logo.col - start.col,
-      row: logo.row - start.row
+      col: logo.col - direction.col,
+      row: logo.row - direction.row
     };
     items.push({
       kind: 'enter',
@@ -2312,25 +2832,77 @@ function fallReturnItems(source, target) {
 
 function fallReturnState(transition, target, elapsed, duration) {
   const raw = constrain(elapsed / max(1, duration), 0, 1);
-  if (raw >= 1) return cloneState(target);
   const source = transition.source;
   const easing = target.easing || easingType;
-  const progress = constrain(applyEasing(raw, easing), 0, 1);
+  const leaving = raw < 0.5;
+  const phaseProgress = leaving ? raw * 2 : (raw - 0.5) * 2;
+  const enterProgress = constrain(applyEasing(phaseProgress, easing), 0, 1);
+  const styleSource = leaving ? source : target;
   const result = {
-    ...cloneState(target), fall: false, noiseRunning: false,
-    gridSize: lerp(source.gridSize, target.gridSize, progress),
-    foreground: lerpColor(color(source.foreground), color(target.foreground), progress).toString('#rrggbb'),
-    background: lerpColor(color(source.background), color(target.background), progress).toString('#rrggbb'),
-    viewFocus: 0, viewOffset: { x: 0, y: 0 }
+    ...cloneState(styleSource),
+    fall: false,
+    noiseRunning: false,
+    gridSize: leaving
+      ? source.gridSize
+      : lerp(source.gridSize, target.gridSize, enterProgress),
+    foreground: lerpColor(color(source.foreground), color(target.foreground), raw).toString('#rrggbb'),
+    background: lerpColor(color(source.background), color(target.background), raw).toString('#rrggbb'),
+    viewFocus: 0,
+    viewOffset: leaving ? logoGridOffset(source) : logoGridOffset(target)
   };
   const grid = gridMetrics(result.gridSize);
   result.gridOrigin = { left: grid.left, top: grid.top };
-  const logos = source.logos.map(logo => ({ ...logo }));
+
+  // Keep advancing the exact same fall simulation for the full transition.
+  // Individual marks remain in the render list until their complete rotated
+  // bounds have crossed the bottom edge; the halfway phase change may never
+  // make still-visible text disappear.
+  if (!transition.bodies) transition.bodies = createFallBodies(source);
+  const departingPoses = stepFallBodies(source, {
+    bodies: transition.bodies,
+    allowBottomExit: true,
+    clock: transition
+  });
+  const sourceGrid = gridMetrics(source.gridSize);
+  const sourceView = viewGridMetrics({
+    ...source,
+    viewFocus: 0,
+    viewOffset: logoGridOffset(source)
+  });
+  const resultView = viewGridMetrics(result);
+  const sourceViewportLeft = sourceGrid.left - sourceView.left;
+  const sourceViewportTop = sourceGrid.top - sourceView.top;
+  const departingLogos = departingPoses.flatMap((logo, index) => {
+    const body = transition.bodies[index];
+    const angle = radians(body.rotation);
+    const extent = sourceGrid.cell * (body.renderScale || 1) * 0.5 *
+      (abs(cos(angle)) + abs(sin(angle))) + 3;
+    const screenPosition = {
+      x: body.x - sourceViewportLeft,
+      y: body.y - sourceViewportTop
+    };
+    if (screenPosition.y - extent >= height) return [];
+    const glyphIndex = logo.glyphIndex ?? index;
+    return [{
+      ...logo,
+      ...canvasPointToLogo(screenPosition, logo.rotation, resultView),
+      textCharacter: logo.textCharacter ?? textCharacterAt(source, glyphIndex),
+      styleVariant: logo.styleVariant || logoStyleAt(source, glyphIndex)
+    }];
+  });
+  transition.complete = raw >= 1 && departingLogos.length === 0;
+
+  if (leaving) {
+    result.logos = departingLogos;
+    return result;
+  }
+
   const enteringLogos = [];
   const transitionStagger = constrain(Number(target.stagger ?? stagger), 0, 1);
   const lastStart = max(0, transition.items.length - 1) * transitionStagger;
-  const itemDuration = duration / max(1, 1 + lastStart);
-  const transitionElapsed = progress * duration;
+  const phaseDuration = duration * 0.5;
+  const itemDuration = phaseDuration / max(1, 1 + lastStart);
+  const transitionElapsed = enterProgress * phaseDuration;
 
   transition.items.forEach((item, index) => {
     const itemStart = index * transitionStagger * itemDuration;
@@ -2339,22 +2911,41 @@ function fallReturnState(transition, target, elapsed, duration) {
       0,
       1
     );
-    const poseSource = item.kind === 'enter'
-      ? target.logos[item.targetIndex]
-      : source.logos[item.logoIndex];
+    const poseSource = target.logos[item.targetIndex];
+    const targetGrid = gridMetrics(target.gridSize);
+    const referencePose = rollPathPose(
+      item.path,
+      itemProgress,
+      target.gridSize,
+      easing
+    );
+    const currentPose = logoFromCenteredPosition(
+      referencePose,
+      centeredGridPosition(referencePose, targetGrid),
+      grid
+    );
+    const envelopePosition = centeredGridPosition(item.envelope, targetGrid);
+    const currentEnvelope = logoFromCenteredPosition(
+      item.envelope,
+      envelopePosition,
+      grid
+    );
     const pose = {
       ...poseSource,
-      ...rollPathPose(item.path, itemProgress, result.gridSize, easing),
-      transitionEnvelope: item.envelope
+      ...currentPose,
+      transitionEnvelope: {
+        ...item.envelope,
+        col: currentEnvelope.col,
+        row: currentEnvelope.row
+      }
     };
-
-    if (item.kind === 'enter') {
-      enteringLogos.push({ ...pose, glyphIndex: item.targetIndex });
-    } else {
-      logos[item.logoIndex] = pose;
-    }
+    const settledRotation = target.logos[item.targetIndex].rotation;
+    pose.textRotation = pose.rotation - settledRotation;
+    pose.textCharacter = textCharacterAt(target, item.targetIndex);
+    pose.styleVariant = logoStyleAt(target, item.targetIndex);
+    enteringLogos.push({ ...pose, glyphIndex: item.targetIndex });
   });
-  result.logos = [...logos, ...enteringLogos];
+  result.logos = [...departingLogos, ...enteringLogos];
   return result;
 }
 
@@ -2370,6 +2961,10 @@ function playbackState(elapsed) {
     segment < keyframes.length - 2 &&
     safeElapsed >= segmentStart + keyframeDuration(segment + 1)
   ) {
+    if (
+      fallReturnTransition?.segment === segment &&
+      !fallReturnTransition.complete
+    ) break;
     segmentStart += keyframeDuration(segment + 1);
     segment++;
   }
@@ -2406,13 +3001,49 @@ function playbackState(elapsed) {
   const currentGridSize = lerp(from.gridSize, to.gridSize, colorProgress);
   const currentGrid = gridMetrics(currentGridSize);
 
-  // Freeze the actual fallen pose once and roll it back into the next layout.
+  // Freeze the actual fallen pose once. It first clears the bottom edge; only
+  // after that does the next layout enter through its envelopes.
   if (isFalling(from) && !isFalling(to)) {
     if (!fallReturnTransition || fallReturnTransition.segment !== segment) {
       const fallen = cloneState(lastPlaybackFallState || from);
-      fallReturnTransition = { segment, source: fallen, items: fallReturnItems(fallen, to) };
+      const departingBodies = fallBodies.map(body => ({
+        ...body,
+        bounds: { ...body.bounds }
+      }));
+      fallReturnTransition = {
+        segment,
+        source: fallen,
+        items: fallReturnItems(fallen, to),
+        bodies: departingBodies.length ? departingBodies : createFallBodies(fallen),
+        lastFallUpdate: millis()
+      };
     }
     return fallReturnState(fallReturnTransition, to, segmentElapsed, plan.animationDuration);
+  }
+
+  // Consecutive fall keyframes share their in-flight bodies, but the requested
+  // layout is still allowed to change. At the midpoint the physics runtime
+  // reconciles its body count and glyph/style metadata with the new keyframe
+  // without resetting the bodies that remain.
+  if (isFalling(from) && isFalling(to)) {
+    const layoutSource = raw < 0.5 ? from : to;
+    const fallState = cloneState(layoutSource);
+    Object.assign(fallState, transitionViewport(from, to, colorProgress));
+    fallState.fall = true;
+    fallState.gridSize = currentGridSize;
+    fallState.showGrid = raw < 0.5 ? from.showGrid : to.showGrid;
+    fallState.foreground = lerpColor(
+      color(from.foreground),
+      color(to.foreground),
+      colorProgress
+    ).toString('#rrggbb');
+    fallState.background = lerpColor(
+      color(from.background),
+      color(to.background),
+      colorProgress
+    ).toString('#rrggbb');
+    fallState.logos = layoutSource.logos.map(logo => ({ ...logo }));
+    return fallState;
   }
 
   // Enter physics immediately and use the source keyframe's untouched grid
@@ -2472,7 +3103,8 @@ function playbackState(elapsed) {
       );
       const heldLogo = logoFromCenteredPosition({
         ...(raw < 0.5 ? sourceLogo : targetLogo),
-        rotation: lerp(sourceLogo.rotation, targetLogo.rotation, colorProgress)
+        rotation: lerp(sourceLogo.rotation, targetLogo.rotation, colorProgress),
+        textCharacter: textCharacterAt(from, item.logoIndex)
       }, {
         col: lerp(sourcePosition.col, targetPosition.col, colorProgress),
         row: lerp(sourcePosition.row, targetPosition.row, colorProgress)
@@ -2519,6 +3151,21 @@ function playbackState(elapsed) {
       ...currentPose,
       transitionEnvelope
     };
+    const settledRotation = item.kind === 'enter'
+      ? to.logos[item.targetIndex].rotation
+      : from.logos[item.logoIndex].rotation;
+    if (item.kind === 'step' && logoStyleAt(from, item.logoIndex) === 'text') {
+      const totalTurn = item.path[item.path.length - 1].rotation - item.path[0].rotation;
+      pose.textRotation = sin(PI * progress) * totalTurn;
+    } else {
+      pose.textRotation = currentPose.rotation - settledRotation;
+    }
+    pose.textCharacter = item.kind === 'enter'
+      ? textCharacterAt(to, item.targetIndex)
+      : textCharacterAt(from, item.logoIndex);
+    pose.styleVariant = item.kind === 'enter'
+      ? logoStyleAt(to, item.targetIndex)
+      : logoStyleAt(from, item.logoIndex);
 
     if ((from.logoVariant === 'vary' || to.logoVariant === 'vary') && item.weight > 0) {
       const sourceLogo = from.logos[item.logoIndex];
