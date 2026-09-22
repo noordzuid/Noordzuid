@@ -68,7 +68,17 @@ function preload() {
 }
 
 function setup() {
-  const canvas = createCanvas(1000, 600);
+  const initialWidth = constrain(
+    Number(document.getElementById('canvas-width').value) || 1000,
+    200,
+    6000
+  );
+  const initialHeight = constrain(
+    Number(document.getElementById('canvas-height').value) || 600,
+    200,
+    6000
+  );
+  const canvas = createCanvas(initialWidth, initialHeight);
   canvas.parent('canvas-container');
   canvasElement = canvas.elt;
   canvasContainer = document.getElementById('canvas-container');
@@ -83,6 +93,7 @@ function setup() {
     canvasResizeObserver.observe(canvasContainer);
   }
 
+  state.gridSize = nearestZoomLevel(state.gridSize);
   connectControls();
   applyLogoPreset();
   addKeyframe();
@@ -166,16 +177,27 @@ function draw() {
 
 function zoomLevels() {
   const gutter = 10 / 64;
-  const minimumRows = ceil(((height / 400 + gutter) / (1 + gutter)) * 2) / 2;
-  const maximumRows = floor(((height / 32 + gutter) / (1 + gutter)) * 2) / 2;
+  const minimumColumns = ceil(((width / 400 + gutter) / (1 + gutter)) / 2) * 2;
+  const maximumColumns = floor(((width / 32 + gutter) / (1 + gutter)) / 2) * 2;
   const levels = [];
 
-  // Each slider step changes the vertical fit by half a cell. Only the
-  // resulting pixel size is stored in state/keyframes, never this index.
-  for (let rows = maximumRows; rows >= minimumRows; rows -= 0.5) {
-    levels.push(height / (rows * (1 + gutter) - gutter));
+  // Zoom is measured across the width and anchored to the centre. Changing
+  // the total fit by two pitches moves each side by exactly one cell + gutter.
+  // The extra pitch makes the visible column count odd, so a centred pattern
+  // starts and ends with full cells instead of two clipped half-cells.
+  // Only the resulting pixel size is stored in state/keyframes, never this index.
+  for (let columns = maximumColumns; columns >= minimumColumns; columns -= 2) {
+    const visibleColumns = columns + 1;
+    levels.push(width / (visibleColumns * (1 + gutter) - gutter));
   }
   return levels;
+}
+
+function nearestZoomLevel(size) {
+  const levels = zoomLevels();
+  return levels.reduce((nearest, level) => (
+    abs(level - size) < abs(nearest - size) ? level : nearest
+  ), levels[0]);
 }
 
 function syncZoomControl() {
@@ -188,6 +210,7 @@ function syncZoomControl() {
   control.max = levels.length - 1;
   control.value = nearest;
   control.title = `${state.gridSize.toFixed(1)} px`;
+  document.getElementById('grid-size-value').value = `${round(state.gridSize)} px`;
 }
 
 function gridMetrics(gridSize) {
@@ -233,14 +256,16 @@ function logoGridOffset(source) {
 }
 
 function transitionViewport(from, to, progress) {
-  const fromGrid = gridMetrics(from.gridSize);
-  const toGrid = gridMetrics(to.gridSize);
+  // Recalculate the grid around the canvas centre at every zoom frame. Linear
+  // interpolation of the old/new top-left corners makes the visual centre
+  // drift whenever the number of visible rows or columns changes.
+  const currentGrid = gridMetrics(lerp(from.gridSize, to.gridSize, progress));
   const fromOffset = logoGridOffset(from);
   const toOffset = logoGridOffset(to);
   return {
     gridOrigin: {
-      left: lerp(fromGrid.left, toGrid.left, progress),
-      top: lerp(fromGrid.top, toGrid.top, progress)
+      left: currentGrid.left,
+      top: currentGrid.top
     },
     viewOffset: {
       x: lerp(fromOffset.x, toOffset.x, progress),
@@ -306,6 +331,7 @@ function drawLogo(logo, drawingState, grid, logoIndex) {
   const y = center.y;
 
   push();
+  applyLogoEnvelope(logo.transitionEnvelope, grid);
   translate(x, y);
   rotate(radians(logo.rotation));
 
@@ -330,6 +356,52 @@ function drawLogo(logo, drawingState, grid, logoIndex) {
   }
 
   pop();
+}
+
+// Pattern/noise transitions treat a cell like an envelope. A departing logo
+// is visible only until it rolls behind the next cell; an arriving logo is
+// revealed only after it rolls out through the relevant edge of its envelope.
+function applyLogoEnvelope(envelope, grid) {
+  if (!envelope) return;
+
+  const left = grid.left + envelope.col * grid.pitch;
+  const top = grid.top + envelope.row * grid.pitch;
+  const right = left + grid.cell;
+  const bottom = top + grid.cell;
+  const extent = max(width, height) * 4;
+  const context = drawingContext;
+
+  context.beginPath();
+  if (envelope.direction.col > 0) {
+    context.rect(
+      envelope.kind === 'enter' ? left : -extent,
+      -extent,
+      envelope.kind === 'enter' ? extent * 2 : right + extent,
+      extent * 2
+    );
+  } else if (envelope.direction.col < 0) {
+    context.rect(
+      envelope.kind === 'enter' ? -extent : left,
+      -extent,
+      envelope.kind === 'enter' ? right + extent : extent * 2,
+      extent * 2
+    );
+  } else if (envelope.direction.row > 0) {
+    context.rect(
+      -extent,
+      envelope.kind === 'enter' ? top : -extent,
+      extent * 2,
+      envelope.kind === 'enter' ? extent * 2 : bottom + extent
+    );
+  } else {
+    context.rect(
+      -extent,
+      envelope.kind === 'enter' ? -extent : top,
+      extent * 2,
+      envelope.kind === 'enter' ? bottom + extent : extent * 2
+    );
+  }
+  context.clip();
 }
 
 function drawTextLogo(drawingState, logoIndex, size) {
@@ -401,7 +473,10 @@ function renderedTextGlyph(character) {
 }
 
 function renderedLogo(variantId, foreground, size) {
-  const cacheKey = `${variantId}-${foreground}-${round(size)}-${pixelDensity()}`;
+  // Cache one generously sized coloured source per variant. Rebuilding a new
+  // p5 graphics buffer for every intermediate zoom size caused visible stalls
+  // in fields containing many copies of the same mark.
+  const cacheKey = `${variantId}-${foreground}-${pixelDensity()}`;
   if (logoRenderCache[cacheKey]) return logoRenderCache[cacheKey];
 
   if (Object.keys(logoRenderCache).length >= 80) {
@@ -409,7 +484,7 @@ function renderedLogo(variantId, foreground, size) {
   }
 
   const source = logoImages[variantId] || logoImages.original;
-  const bufferSize = max(1, round(size));
+  const bufferSize = 512;
   const buffer = createGraphics(bufferSize, bufferSize);
   const imageScale = min(bufferSize / source.width, bufferSize / source.height);
 
@@ -862,6 +937,14 @@ function connectControls() {
     }
 
     state.gridSize = newSize;
+    if (!isFalling(state)) {
+      if (state.mode === 'pattern') {
+        state.logos = patternLogosFor(state, newGrid, state.logos);
+      } else if (state.mode === 'noise') {
+        state.logos = noiseLogosFor(state, newGrid, state.logos);
+        nextNoiseMoveAt = millis() + 250;
+      }
+    }
     syncZoomControl();
     moves = {};
 
@@ -960,19 +1043,32 @@ function applyPattern() {
   state.mode = 'pattern';
   const pattern = state.pattern;
   state.pattern = pattern;
-  const cells = patternCells(pattern, gridMetrics(state.gridSize));
-
-  state.logos = cells.map(cell => ({
-    col: cell.col,
-    row: cell.row,
-    rotation: cellRotation(cell.col, cell.row)
-  }));
-  if (state.logoVariant === 'vary') applyNoiseStyles();
+  state.logos = patternLogosFor(state, gridMetrics(state.gridSize));
   if (isFalling(state)) resetFallBodies();
 
   selectedLogo = 0;
   moves = {};
   showStatus('Patroon toegepast');
+}
+
+function patternLogosFor(source, grid, previousLogos = []) {
+  const previousVariants = new Map(previousLogos.map(logo => (
+    [`${round(logo.col)},${round(logo.row)}`, logo.variant]
+  )));
+
+  return patternCells(source.pattern || 'alternating', grid).map((cell, index) => {
+    const logo = {
+      col: cell.col,
+      row: cell.row,
+      rotation: cellRotation(cell.col, cell.row, 0, source.gridPhase || 0)
+    };
+
+    if (source.logoVariant === 'vary') {
+      logo.variant = previousVariants.get(`${cell.col},${cell.row}`) ||
+        noiseVariantFor(cell.col, cell.row, noiseIteration, index);
+    }
+    return logo;
+  });
 }
 
 function setMode(mode) {
@@ -1006,42 +1102,77 @@ function updateTextControls() {
 
 function applyNoiseField() {
   const grid = gridMetrics(state.gridSize);
-  const cells = [];
-
-  for (let row = 0; row < grid.rows; row++) {
-    for (let col = 0; col < grid.cols; col++) {
-      const value = noise(col * 0.31, row * 0.31, noiseIteration * 0.21);
-      cells.push({
-        col,
-        row,
-        score: value
-      });
-    }
-  }
-
-  const density = {
-    airy: 0.2,
-    balanced: 0.34,
-    full: 0.48
-  }[state.noiseDensity || 'balanced'];
-  const amount = max(2, round(cells.length * density));
-  state.logos = cells
-    .sort((a, b) => b.score - a.score)
-    .slice(0, amount)
-    .map(({ col, row }, index) => ({
-      col,
-      row,
-      rotation: cellRotation(col, row),
-      ...(state.logoVariant === 'vary'
-        ? { variant: noiseVariantFor(col, row, noiseIteration, index) }
-        : {})
-    }));
+  state.noiseFieldIteration = noiseIteration;
+  state.logos = noiseLogosFor(state, grid, [], state.noiseFieldIteration);
   selectedLogo = 0;
   noiseIteration++;
   moves = {};
   nextNoiseMoveAt = millis() + 250;
   showStatus('Noise veld beweegt automatisch');
   if (isFalling(state)) resetFallBodies();
+}
+
+function noiseLogosFor(
+  source,
+  grid,
+  previousLogos = [],
+  iteration = source.noiseFieldIteration ?? noiseIteration
+) {
+  const density = {
+    airy: 0.2,
+    balanced: 0.34,
+    full: 0.48
+  }[source.noiseDensity || 'balanced'];
+  const amount = max(2, round(grid.cols * grid.rows * density));
+  const centerCol = (grid.cols - 1) / 2;
+  const centerRow = (grid.rows - 1) / 2;
+  const previousByCell = new Map();
+
+  previousLogos.forEach(logo => {
+    const col = round(logo.col);
+    const row = round(logo.row);
+    if (col < 0 || col >= grid.cols || row < 0 || row >= grid.rows) return;
+    previousByCell.set(`${col},${row}`, logo);
+  });
+
+  const cells = [];
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
+      const seed = sin(
+        (col - centerCol + 101) * 12.9898 +
+        (row - centerRow + 101) * 78.233 +
+        (iteration + 1) * 37.719
+      ) * 43758.5453;
+      cells.push({ col, row, score: seed - floor(seed) });
+    }
+  }
+
+  const retained = cells.filter(cell => previousByCell.has(`${cell.col},${cell.row}`));
+  const additions = cells
+    .filter(cell => !previousByCell.has(`${cell.col},${cell.row}`))
+    .sort((a, b) => b.score - a.score);
+  const selected = retained.length >= amount
+    ? retained.sort((a, b) => b.score - a.score).slice(0, amount)
+    : retained.concat(additions.slice(0, amount - retained.length));
+
+  return selected.map(({ col, row }, index) => {
+    const previous = previousByCell.get(`${col},${row}`);
+    return {
+      col,
+      row,
+      rotation: previous?.rotation ?? cellRotation(col, row, 0, source.gridPhase || 0),
+      ...(source.logoVariant === 'vary'
+        ? {
+            variant: previous?.variant || noiseVariantFor(
+              col - centerCol,
+              row - centerRow,
+              iteration,
+              index
+            )
+          }
+        : {})
+    };
+  });
 }
 
 function applyNoiseStep() {
@@ -1170,6 +1301,27 @@ function playbackNoiseState(drawingState) {
       iteration: noiseIteration,
       nextMoveAt: millis()
     };
+  }
+
+  const previousGridSize = playbackNoiseRuntime.state.gridSize;
+  const zoomChanged = abs(previousGridSize - drawingState.gridSize) > 0.0001;
+
+  if (zoomChanged) {
+    const previousGrid = gridMetrics(previousGridSize);
+    const currentGrid = gridMetrics(drawingState.gridSize);
+    playbackNoiseRuntime.state.logos = playbackNoiseRuntime.state.logos.map(logo => (
+      logoFromCenteredPosition(
+        logo,
+        centeredGridPosition(logo, previousGrid),
+        currentGrid
+      )
+    ));
+
+    // A procedural one-cell move belongs to the old grid scale. Pause and
+    // restart it after zoom settles instead of letting it pull the field away
+    // from the shared centre anchor.
+    playbackNoiseRuntime.moves = {};
+    playbackNoiseRuntime.nextMoveAt = millis() + 250;
   }
 
   // Reuse the exact preview engine, but keep its mutable state separate from
@@ -1467,7 +1619,9 @@ function patternCells(pattern, grid) {
 
   for (let row = 0; row <= lastRow; row++) {
     for (let col = 0; col <= lastCol; col++) {
-      if ((row + col) % 2 === 0) {
+      // Keep the checker field anchored to the visual centre. Its parity must
+      // not flip merely because zoom changes the number of surrounding cells.
+      if ((row - centerRow + col - centerCol) % 2 === 0) {
         cells.push({ col, row });
       }
     }
@@ -1667,6 +1821,29 @@ function animationDuration() {
     .reduce((total, keyframe, index) => total + keyframeDuration(index), 0);
 }
 
+function centeredGridCell(logo, grid) {
+  const position = centeredGridPosition(logo, grid);
+  return {
+    col: round(position.col),
+    row: round(position.row)
+  };
+}
+
+function centeredGridPosition(logo, grid) {
+  return {
+    col: logo.col - (grid.cols - 1) / 2,
+    row: logo.row - (grid.rows - 1) / 2
+  };
+}
+
+function logoFromCenteredPosition(logo, position, grid) {
+  return {
+    ...logo,
+    col: position.col + (grid.cols - 1) / 2,
+    row: position.row + (grid.rows - 1) / 2
+  };
+}
+
 function transitionPlan(index, source = keyframes[index]) {
   const from = source;
   const to = keyframes[index + 1];
@@ -1679,13 +1856,54 @@ function transitionPlan(index, source = keyframes[index]) {
     cols: max(fromGrid.cols, toGrid.cols),
     rows: max(fromGrid.rows, toGrid.rows)
   };
+
+  // Only the dedicated logo mode keeps identities and follows longer routes.
+  // Fields instead change locally: one roll out for a removed mark and one
+  // roll in for a new mark. The cell edge masks the rest of that movement.
+  if (from.mode !== 'logo' || to.mode !== 'logo') {
+    return simpleEnvelopeTransitionPlan(
+      from,
+      to,
+      transitionGrid,
+      frameLength,
+      animationLength,
+      transitionStagger
+    );
+  }
+
   const positions = from.logos.map(logo => ({ ...logo }));
   const pairCandidates = [];
   const usedSources = new Set();
   const usedTargets = new Set();
+  const items = [];
+
+  // A pure zoom changes absolute row/column indices while keeping the same
+  // centre-relative cells. Hold those marks in place instead of routing them
+  // out and back in. This also applies in the tracked logo mode.
+  from.logos.forEach((logo, sourceIndex) => {
+    const sourceCell = centeredGridCell(logo, fromGrid);
+    const targetIndex = to.logos.findIndex((target, index) => {
+      if (usedTargets.has(index)) return false;
+      const targetCell = centeredGridCell(target, toGrid);
+      return targetCell.col === sourceCell.col && targetCell.row === sourceCell.row;
+    });
+    if (targetIndex < 0) return;
+
+    usedSources.add(sourceIndex);
+    usedTargets.add(targetIndex);
+    items.push({
+      kind: 'hold',
+      logoIndex: sourceIndex,
+      targetIndex,
+      path: [{ ...logo }],
+      weight: 0
+    });
+  });
 
   from.logos.forEach((source, sourceIndex) => {
+    if (usedSources.has(sourceIndex)) return;
     to.logos.forEach((target, targetIndex) => {
+      if (usedTargets.has(targetIndex)) return;
       pairCandidates.push({
         sourceIndex,
         targetIndex,
@@ -1708,7 +1926,6 @@ function transitionPlan(index, source = keyframes[index]) {
     remaining.push(pair);
   });
 
-  const items = [];
   const reservedCells = [];
 
   while (remaining.length) {
@@ -1780,6 +1997,110 @@ function transitionPlan(index, source = keyframes[index]) {
   });
 
   scheduleRollRoutes(items, transitionGrid, animationLength, transitionStagger);
+
+  return { items, duration: frameLength, animationDuration: animationLength };
+}
+
+function simpleEnvelopeTransitionPlan(
+  from,
+  to,
+  grid,
+  frameLength,
+  animationLength,
+  transitionStagger
+) {
+  const items = [];
+  const usedTargets = new Set();
+  const fromGrid = gridMetrics(from.gridSize);
+  const toGrid = gridMetrics(to.gridSize);
+  const targetByPosition = new Map();
+
+  to.logos.forEach((logo, index) => {
+    const position = centeredGridCell(logo, toGrid);
+    targetByPosition.set(`${position.col},${position.row}`, index);
+  });
+
+  // Absolute cell indices shift during a centred zoom. Match the stable
+  // centre-relative position so unchanged marks remain continuously visible.
+  from.logos.forEach((logo, logoIndex) => {
+    const sourceCell = centeredGridCell(logo, fromGrid);
+    const candidateIndex = targetByPosition.get(`${sourceCell.col},${sourceCell.row}`);
+    const targetIndex = candidateIndex !== undefined && !usedTargets.has(candidateIndex)
+      ? candidateIndex
+      : -1;
+
+    if (targetIndex >= 0) {
+      usedTargets.add(targetIndex);
+      items.push({
+        kind: 'hold',
+        logoIndex,
+        targetIndex,
+        path: [{ ...logo }],
+        weight: 0
+      });
+      return;
+    }
+
+    const direction = outwardDirection(logo, grid);
+    const targetCell = {
+      col: logo.col + direction.col,
+      row: logo.row + direction.row
+    };
+    items.push({
+      kind: 'exit',
+      logoIndex,
+      path: [{ ...logo }, {
+        ...targetCell,
+        rotation: logo.rotation + anchoredTurn(logo, targetCell)
+      }],
+      weight: 1,
+      envelope: {
+        kind: 'exit',
+        col: logo.col,
+        row: logo.row,
+        direction
+      }
+    });
+  });
+
+  to.logos.forEach((logo, targetIndex) => {
+    if (usedTargets.has(targetIndex)) return;
+
+    const outward = outwardDirection(logo, grid);
+    const start = {
+      col: logo.col + outward.col,
+      row: logo.row + outward.row
+    };
+    const direction = {
+      col: logo.col - start.col,
+      row: logo.row - start.row
+    };
+    items.push({
+      kind: 'enter',
+      targetIndex,
+      path: [{
+        ...start,
+        rotation: logo.rotation - anchoredTurn(start, logo)
+      }, { ...logo }],
+      weight: 1,
+      envelope: {
+        kind: 'enter',
+        col: logo.col,
+        row: logo.row,
+        direction
+      }
+    });
+  });
+
+  // Stagger remains available, but there are no collision reservations or
+  // chained routes anymore: every moving mark performs exactly one roll.
+  const movingItems = items.filter(item => item.weight > 0);
+  const lastStart = max(0, movingItems.length - 1) * transitionStagger;
+  movingItems.forEach((item, index) => {
+    item.start = index * transitionStagger * animationLength /
+      max(1, 1 + lastStart);
+    item.duration = animationLength / max(1, 1 + lastStart);
+  });
 
   return { items, duration: frameLength, animationDuration: animationLength };
 }
@@ -1928,48 +2249,65 @@ function outwardDirection(logo, grid) {
   ][quarter];
 }
 
-// Recovery paths use screen positions: fallen bodies are no longer on a cell,
-// and changing zoom or focus must not snap them back onto the saved grid first.
+// A fall ends with the same one-roll envelope transition as other field
+// changes. Fallen marks roll behind their current envelope while the target
+// marks emerge from the incoming edge of their own cells.
 function fallReturnItems(source, target) {
-  const fromGrid = viewGridMetrics(source);
-  const toGrid = viewGridMetrics(target);
-  const available = source.logos.map(logo => ({
-    logo, point: cellCenter(logo.col, logo.row, fromGrid)
-  }));
-  const pairs = target.logos.map(logo => {
-    const end = cellCenter(logo.col, logo.row, toGrid);
-    let nearest = -1;
-    let distance = Infinity;
-    available.forEach((item, index) => {
-      const d = Math.hypot(item.point.x - end.x, item.point.y - end.y);
-      if (d < distance) { distance = d; nearest = index; }
-    });
-    const start = nearest >= 0 ? available.splice(nearest, 1)[0] : {
-      logo: { ...logo, rotation: logo.rotation - 90 },
-      point: { x: end.x, y: height + toGrid.cell }
+  const sourceGrid = gridMetrics(source.gridSize);
+  const targetGrid = gridMetrics(target.gridSize);
+  const grid = {
+    cols: max(sourceGrid.cols, targetGrid.cols),
+    rows: max(sourceGrid.rows, targetGrid.rows)
+  };
+  const items = source.logos.map((logo, logoIndex) => {
+    const direction = outwardDirection(logo, grid);
+    const destination = {
+      col: logo.col + direction.col,
+      row: logo.row + direction.row
     };
-    return { start, end, logo };
+    return {
+      kind: 'exit',
+      logoIndex,
+      path: [{ ...logo }, {
+        ...destination,
+        rotation: logo.rotation + anchoredTurn(logo, destination)
+      }],
+      envelope: {
+        kind: 'exit',
+        col: logo.col,
+        row: logo.row,
+        direction
+      }
+    };
   });
-  available.forEach(start => pairs.push({
-    start, end: { x: start.point.x, y: height + fromGrid.cell * 2 },
-    logo: { ...start.logo, rotation: start.logo.rotation + 90 }, exit: true
-  }));
-  return pairs.map(pair => {
-    const path = [{ ...pair.start.point, rotation: pair.start.logo.rotation }];
-    // Orthogonal, cell-sized rolls, with an exact fractional final step.
-    ['x', 'y'].forEach(axis => {
-      while (Math.abs(pair.end[axis] - path[path.length - 1][axis]) > 0.001) {
-        const previous = path[path.length - 1];
-        const delta = Math.sign(pair.end[axis] - previous[axis]) *
-          Math.min(toGrid.pitch, Math.abs(pair.end[axis] - previous[axis]));
-        path.push({ ...previous, [axis]: previous[axis] + delta,
-          rotation: previous.rotation + Math.sign(delta) * 90 });
+
+  target.logos.forEach((logo, targetIndex) => {
+    const outward = outwardDirection(logo, grid);
+    const start = {
+      col: logo.col + outward.col,
+      row: logo.row + outward.row
+    };
+    const direction = {
+      col: logo.col - start.col,
+      row: logo.row - start.row
+    };
+    items.push({
+      kind: 'enter',
+      targetIndex,
+      path: [{
+        ...start,
+        rotation: logo.rotation - anchoredTurn(start, logo)
+      }, { ...logo }],
+      envelope: {
+        kind: 'enter',
+        col: logo.col,
+        row: logo.row,
+        direction
       }
     });
-    const finalRotation = path[path.length - 1].rotation;
-    const correction = ((pair.logo.rotation - finalRotation + 540) % 360) - 180;
-    return { ...pair, path, correction };
   });
+
+  return items;
 }
 
 function fallReturnState(transition, target, elapsed, duration) {
@@ -1987,26 +2325,36 @@ function fallReturnState(transition, target, elapsed, duration) {
   };
   const grid = gridMetrics(result.gridSize);
   result.gridOrigin = { left: grid.left, top: grid.top };
-  result.logos = transition.items.map(item => {
-    const count = item.path.length - 1;
-    const position = progress * count;
-    const index = min(max(0, count - 1), floor(position));
-    const from = item.path[index];
-    const to = item.path[min(index + 1, count)];
-    const local = count ? applyEasing(position - index, easing) : 0;
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const pivot = dx !== 0
-      ? { x: from.x + dx / 2, y: from.y + abs(dx) / 2 }
-      : { x: from.x - abs(dy) / 2, y: from.y + dy / 2 };
-    const center = count ? rotatePoint(from, pivot, radians((to.rotation - from.rotation) * local)) : from;
-    const rotation = lerp(from.rotation, to.rotation, local) + item.correction * progress;
-    return {
-      ...item.logo,
-      ...canvasPointToLogo(center, rotation, grid),
-      variant: raw < 0.5 ? item.start.logo.variant : item.logo.variant
+  const logos = source.logos.map(logo => ({ ...logo }));
+  const enteringLogos = [];
+  const transitionStagger = constrain(Number(target.stagger ?? stagger), 0, 1);
+  const lastStart = max(0, transition.items.length - 1) * transitionStagger;
+  const itemDuration = duration / max(1, 1 + lastStart);
+  const transitionElapsed = progress * duration;
+
+  transition.items.forEach((item, index) => {
+    const itemStart = index * transitionStagger * itemDuration;
+    const itemProgress = constrain(
+      (transitionElapsed - itemStart) / max(1, itemDuration),
+      0,
+      1
+    );
+    const poseSource = item.kind === 'enter'
+      ? target.logos[item.targetIndex]
+      : source.logos[item.logoIndex];
+    const pose = {
+      ...poseSource,
+      ...rollPathPose(item.path, itemProgress, result.gridSize, easing),
+      transitionEnvelope: item.envelope
     };
+
+    if (item.kind === 'enter') {
+      enteringLogos.push({ ...pose, glyphIndex: item.targetIndex });
+    } else {
+      logos[item.logoIndex] = pose;
+    }
   });
+  result.logos = [...logos, ...enteringLogos];
   return result;
 }
 
@@ -2055,6 +2403,8 @@ function playbackState(elapsed) {
   const transitionEasing = to.easing || easingType;
   const eased = applyEasing(raw, transitionEasing);
   const colorProgress = constrain(eased, 0, 1);
+  const currentGridSize = lerp(from.gridSize, to.gridSize, colorProgress);
+  const currentGrid = gridMetrics(currentGridSize);
 
   // Freeze the actual fallen pose once and roll it back into the next layout.
   if (isFalling(from) && !isFalling(to)) {
@@ -2108,12 +2458,66 @@ function playbackState(elapsed) {
     const progress = item.duration > 0
       ? constrain((transitionElapsed - item.start) / item.duration, 0, 1)
       : 1;
+
+    if (item.kind === 'hold') {
+      const sourceLogo = from.logos[item.logoIndex];
+      const targetLogo = to.logos[item.targetIndex];
+      const sourcePosition = centeredGridPosition(
+        sourceLogo,
+        gridMetrics(from.gridSize)
+      );
+      const targetPosition = centeredGridPosition(
+        targetLogo,
+        gridMetrics(to.gridSize)
+      );
+      const heldLogo = logoFromCenteredPosition({
+        ...(raw < 0.5 ? sourceLogo : targetLogo),
+        rotation: lerp(sourceLogo.rotation, targetLogo.rotation, colorProgress)
+      }, {
+        col: lerp(sourcePosition.col, targetPosition.col, colorProgress),
+        row: lerp(sourcePosition.row, targetPosition.row, colorProgress)
+      }, currentGrid);
+      logos[item.logoIndex] = heldLogo;
+      sourceFocusLogos.push(heldLogo);
+      targetFocusLogos.push(heldLogo);
+      return;
+    }
+
     const poseSource = item.kind === 'enter'
       ? to.logos[item.targetIndex]
       : from.logos[item.logoIndex];
+    const referenceGrid = item.kind === 'enter'
+      ? gridMetrics(to.gridSize)
+      : gridMetrics(from.gridSize);
+    const referenceSize = item.kind === 'enter'
+      ? to.gridSize
+      : from.gridSize;
+    const referencePose = rollPathPose(
+      item.path,
+      progress,
+      referenceSize,
+      transitionEasing
+    );
+    const centredPose = centeredGridPosition(referencePose, referenceGrid);
+    const currentPose = logoFromCenteredPosition(referencePose, centredPose, currentGrid);
+    let transitionEnvelope;
+    if (item.envelope) {
+      const envelopePosition = centeredGridPosition(item.envelope, referenceGrid);
+      const currentEnvelope = logoFromCenteredPosition(
+        item.envelope,
+        envelopePosition,
+        currentGrid
+      );
+      transitionEnvelope = {
+        ...item.envelope,
+        col: currentEnvelope.col,
+        row: currentEnvelope.row
+      };
+    }
     const pose = {
       ...poseSource,
-      ...rollPathPose(item.path, progress, from.gridSize, transitionEasing)
+      ...currentPose,
+      transitionEnvelope
     };
 
     if ((from.logoVariant === 'vary' || to.logoVariant === 'vary') && item.weight > 0) {
@@ -2172,7 +2576,7 @@ function playbackState(elapsed) {
     pattern: raw < 0.5 ? (from.pattern || 'alternating') : (to.pattern || 'alternating'),
     focusOnLogo: raw < 0.5 ? Boolean(from.focusOnLogo) : Boolean(to.focusOnLogo),
     viewFocus: lerp(from.focusOnLogo ? 1 : 0, to.focusOnLogo ? 1 : 0, colorProgress),
-    gridSize: lerp(from.gridSize, to.gridSize, colorProgress),
+    gridSize: currentGridSize,
     gridPhase: raw < 0.5 ? (from.gridPhase || 0) : (to.gridPhase || 0),
     showGrid: raw < 0.5 ? from.showGrid : to.showGrid,
     logoLayout: raw < 0.5
@@ -2276,12 +2680,13 @@ function bounceOut(t) {
 }
 
 function resizeFromInputs() {
-  const newWidth = constrain(Number(document.getElementById('canvas-width').value) || 600, 200, 1920);
-  const newHeight = constrain(Number(document.getElementById('canvas-height').value) || 600, 200, 1920);
+  const newWidth = constrain(Number(document.getElementById('canvas-width').value) || 600, 200, 6000);
+  const newHeight = constrain(Number(document.getElementById('canvas-height').value) || 600, 200, 6000);
   if (newWidth === width && newHeight === height) return;
   const scale = min(newWidth / width, newHeight / height);
-  // Every frame has its own zoom/layout. Capture each grid before resizing;
-  // changing export resolution must never reapply patterns or noise seeds.
+  // Every frame has its own zoom/layout. Capture each grid before resizing so
+  // manual/logo layouts keep their position and procedural patterns can be
+  // rebuilt across every cell of the resized canvas.
   const layouts = [state, ...keyframes].map(source => ({
     source,
     oldGrid: gridMetrics(source.gridSize)
@@ -2298,8 +2703,27 @@ function resizeFromInputs() {
       ...logo, col: logo.col + shiftCol, row: logo.row + shiftRow
     });
     source.gridPhase = (((source.gridPhase || 0) - shiftCol - shiftRow) % 2 + 2) % 2;
-    source.logos = source.logos.map(reposition);
-    if (source.preFallLogos) source.preFallLogos = source.preFallLogos.map(reposition);
+    const repositionedLogos = source.logos.map(reposition);
+    const repositionedPreFallLogos = source.preFallLogos?.map(reposition);
+    const keepLiveFallPose = source === state && isFalling(source);
+
+    if (source.mode === 'pattern' && !keepLiveFallPose) {
+      source.logos = patternLogosFor(source, newGrid, repositionedLogos);
+    } else if (source.mode === 'noise' && !keepLiveFallPose) {
+      source.logos = noiseLogosFor(source, newGrid, repositionedLogos);
+    } else {
+      source.logos = repositionedLogos;
+    }
+
+    if (source.preFallLogos) {
+      if (source.mode === 'pattern') {
+        source.preFallLogos = patternLogosFor(source, newGrid, repositionedPreFallLogos);
+      } else if (source.mode === 'noise') {
+        source.preFallLogos = noiseLogosFor(source, newGrid, repositionedPreFallLogos);
+      } else {
+        source.preFallLogos = repositionedPreFallLogos;
+      }
+    }
     // These are transient camera coordinates, not part of the saved layout.
     delete source.gridOrigin;
     delete source.viewOffset;

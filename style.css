@@ -94,6 +94,20 @@ input[type="range"] {
   accent-color: #111111;
 }
 
+.range-with-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 8px;
+}
+
+.range-with-value output {
+  color: #555555;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
 input[type="checkbox"] {
   width: 16px;
   height: 16px;
