@@ -22,6 +22,38 @@ const COLOR_PALETTE = [
   '#270C13', '#F28EFF', '#353214', '#FF8D8C', '#DDAAFF',
   '#8BCAFF', '#D4F2AA', '#053530', '#EBE8E4'
 ];
+
+// Pas hier de tekst-hitbox per letter aan. 1 = de automatisch gemeten grootte.
+// width/height schalen de box; y verplaatst de letter binnen de box (+ = omlaag).
+const LETTER_HITBOX_SIZES = {
+  A: { width: 0.9, height: 1.1 },
+  B: { width: 0.9, height: 1 },
+  C: { width: 0.9, height: 1 },
+  D: { width: 0.9, height: 1 },
+  E: { width: 0.9, height: 1 },
+  F: { width: 1, height: 0.85, y: 0.08 },
+  G: { width: 0.9, height: 1.0 },
+  H: { width: 0.9, height: 0.85, y: 0.075 },
+  I: { width: 0.8, height: 0.85, y: 0.075 },
+  J: { width: 0.9, height: 1 },
+  K: { width: 0.9, height: 0.85, y: 0.075 },
+  L: { width: 0.9, height: 0.85, y: 0.075 },
+  M: { width: 0.95, height: 0.8, y: 0.075 },
+  N: { width: 0.9, height: 0.8, y: 0.075 },
+  O: { width: 0.9, height: 0.9 },
+  P: { width: 0.9, height: 0.95 },
+  Q: { width: 0.9, height: 0.95 },
+  R: { width: 0.9, height: 0.8, y: 0.075 },
+  S: { width: 0.9, height: 0.95 },
+  T: { width: 1, height: 0.95 },
+  U: { width: 0.9, height: 1 },
+  V: { width: 1, height: 0.8, y: 0.075 },
+  W: { width: 1, height: 0.8, y: 0.075 },
+  X: { width: 1, height: 0.8, y: 0.075 },
+  Y: { width: 1, height: 1.0 },
+  Z: { width: 1, height: 0.8, y: 0.075 }
+};
+const DEFAULT_LETTER_HITBOX_SIZE = { width: 1, height: 1, y: 0 };
 const DEFAULT_DURATION = 1200;
 const DEFAULT_ANIMATION_DURATION = 600;
 
@@ -29,13 +61,13 @@ let state = {
   mode: 'confetti',
   size: 200,
   logoVariant: 'text',
-  logoText: 'jubileum',
+  logoText: 'abcdefghijklmnopqrstuvwxyz',
   direction: 'left',
   polonaisePattern: 'continuous',
   polonaiseTracks: null,
   confettiForce: 2,
   randomStrokeColors: false,
-  debugHitboxes: false,
+  debugHitboxes: true,
   partyFrequency: 35,
   partyVariation: 0,
   partyDensity: 50,
@@ -320,18 +352,37 @@ function createTextParticles(source, characters, renderSize = source.size) {
 }
 
 function textParticleBounds(source, character) {
+  const glyph = textGlyphMetrics(source.size, character);
+  const padding = max(2, source.size * 0.035);
+  const hitboxSize = LETTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
+    DEFAULT_LETTER_HITBOX_SIZE;
+  return {
+    halfWidth: max(2, (glyph.width / 2 + padding) * hitboxSize.width),
+    halfHeight: max(3, (glyph.height / 2 + padding) * hitboxSize.height)
+  };
+}
+
+function textGlyphMetrics(size, character) {
   push();
   textFont(brandFont);
   textStyle(BOLD);
-  textSize(source.size * 1.5);
+  textSize(size * 1.5);
+  textAlign(LEFT, BASELINE);
   const metrics = drawingContext.measureText(character);
   pop();
-  const padding = max(2, source.size * 0.035);
-  const measuredHeight = (metrics.actualBoundingBoxAscent || source.size * 0.72) +
-    (metrics.actualBoundingBoxDescent || source.size * 0.18);
+  const left = Number.isFinite(metrics.actualBoundingBoxLeft)
+    ? metrics.actualBoundingBoxLeft
+    : 0;
+  const right = Number.isFinite(metrics.actualBoundingBoxRight)
+    ? metrics.actualBoundingBoxRight
+    : metrics.width;
+  const ascent = metrics.actualBoundingBoxAscent || size * 0.72;
+  const descent = metrics.actualBoundingBoxDescent || size * 0.18;
   return {
-    halfWidth: max(2, metrics.width / 2 + padding),
-    halfHeight: max(3, measuredHeight / 2 + padding)
+    width: max(1, left + right),
+    height: max(1, ascent + descent),
+    drawX: (left - right) / 2,
+    drawY: (ascent - descent) / 2
   };
 }
 
@@ -971,12 +1022,16 @@ function drawMark(source, x, y, size, rotation, index, variantOverride, characte
   translate(x, y);
   rotate(radians(rotation));
   if (variant === 'text') {
+    const character = characterOverride ?? textCharacterAt(source, index);
+    const glyph = textGlyphMetrics(size, character);
+    const hitboxSize = LETTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
+      DEFAULT_LETTER_HITBOX_SIZE;
     fill(source.foreground);
-    textAlign(CENTER, CENTER);
+    textAlign(LEFT, BASELINE);
     textFont(brandFont);
     textStyle(BOLD);
     textSize(size * 1.50);
-    text(characterOverride ?? textCharacterAt(source, index), 0, -size * 0.03);
+    text(character, glyph.drawX, glyph.drawY + size * (hitboxSize.y || 0));
   } else {
     const logo = renderedLogo(variant, source.foreground);
     image(logo, 0, 0, size, size);
