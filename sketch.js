@@ -1761,8 +1761,11 @@ function createFallBodies(sourceState = state) {
       weight,
       variant: logo.variant,
       glyphIndex: logo.glyphIndex ?? index,
-      textCharacter: logo.textCharacter,
-      styleVariant: logo.styleVariant,
+      // Capture the actual glyph at the moment physics starts.  Relying on
+      // the render state's index here breaks as soon as the text changes
+      // between two fall keyframes (or the logo count is reconciled).
+      textCharacter: logo.textCharacter ?? textCharacterAt(sourceState, index),
+      styleVariant: logo.styleVariant || logoStyleAt(sourceState, index),
       renderScale,
       collisionRadius: grid.cell * renderScale * 0.46,
       bounds: { ...bounds }
