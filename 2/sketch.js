@@ -25,6 +25,9 @@ const COLOR_PALETTE = [
 
 // Pas hier de tekst-hitbox per letter aan. 1 = de automatisch gemeten grootte.
 // width/height schalen de box; y verplaatst de letter binnen de box (+ = omlaag).
+// Dit is extra ruimte per kant, als deel van de ingestelde Grootte (0.04 = 4%).
+const TEXT_HITBOX_PADDING = 0.05;
+
 const LETTER_HITBOX_SIZES = {
   A: { width: 0.9, height: 1.1 },
   B: { width: 0.9, height: 1 },
@@ -54,9 +57,6 @@ const LETTER_HITBOX_SIZES = {
   Z: { width: 1, height: 0.8, y: 0.075 }
 };
 const DEFAULT_LETTER_HITBOX_SIZE = { width: 1, height: 1, y: 0 };
-const DEFAULT_DURATION = 1200;
-const DEFAULT_ANIMATION_DURATION = 600;
-
 let state = {
   mode: 'confetti',
   size: 200,
@@ -67,7 +67,7 @@ let state = {
   polonaiseTracks: null,
   confettiForce: 2,
   randomStrokeColors: false,
-  debugHitboxes: true,
+  debugHitboxes: false,
   partyFrequency: 35,
   partyVariation: 0,
   partyDensity: 50,
@@ -77,12 +77,8 @@ let state = {
   background: '#270C13'
 };
 
-let keyframes = [];
-let selectedKeyframe = 0;
-let playing = false;
 let exporting = false;
 let exportingPNG = false;
-let animationStart = 0;
 let canvasElement;
 let canvasContainer;
 let canvasResizeObserver;
@@ -144,7 +140,6 @@ function setup() {
     canvasResizeObserver.observe(canvasContainer);
   }
 
-  addKeyframe();
   syncControls();
   resetParticles(state);
   showStatus('Linksklik voor force · rechtermuisklik voor een stroke');
@@ -164,9 +159,8 @@ function loadBrandFont() {
 
 function draw() {
   const now = millis();
-  const elapsed = now - animationStart;
-  const drawingState = playing || exporting ? playbackState(elapsed) : state;
-  const sceneTime = playing || exporting ? elapsed / 1000 : now / 1000;
+  const drawingState = state;
+  const sceneTime = now / 1000;
 
   spawnHeldStroke(now);
 
@@ -187,12 +181,6 @@ function draw() {
     drawParty(drawingState, now);
   }
 
-  if (playing && elapsed >= animationDuration()) {
-    state = cloneState(keyframes[keyframes.length - 1] || state);
-    selectedKeyframe = max(0, keyframes.length - 1);
-    stopPlayback();
-    syncControls();
-  }
 }
 
 function drawConfetti(source, now) {
@@ -353,7 +341,7 @@ function createTextParticles(source, characters, renderSize = source.size) {
 
 function textParticleBounds(source, character) {
   const glyph = textGlyphMetrics(source.size, character);
-  const padding = max(2, source.size * 0.035);
+  const padding = max(0, source.size * TEXT_HITBOX_PADDING);
   const hitboxSize = LETTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
     DEFAULT_LETTER_HITBOX_SIZE;
   return {
@@ -1086,7 +1074,7 @@ function textCharacterAt(source, index) {
 }
 
 function mousePressed(event) {
-  if (event.target !== canvasElement || exporting || playing) return;
+  if (event.target !== canvasElement) return;
   const point = canvasPoint(event);
   if (state.mode === 'confetti') {
     if (event.button === 2) {
@@ -1112,7 +1100,6 @@ function mousePressed(event) {
     } else {
       state.garlands[drawingGarlandIndex].push(point);
       drawingGarlandIndex = -1;
-      updateKeyframe();
       showStatus('Slinger opgehangen');
     }
     return false;
@@ -1120,7 +1107,7 @@ function mousePressed(event) {
 }
 
 function spawnHeldStroke(now) {
-  if (!rightMouseHeld || !strokePointer || state.mode !== 'confetti' || exporting || playing) return;
+  if (!rightMouseHeld || !strokePointer || state.mode !== 'confetti') return;
   if (now - lastStrokeSpawn < STROKE_SPAWN_INTERVAL) return;
   spawnStroke(strokePointer.x, strokePointer.y);
   lastStrokeSpawn = now;
@@ -1144,7 +1131,6 @@ function togglePolonaiseTrack(point) {
   if (existingIndex >= 0) tracks.splice(existingIndex, 1);
   else tracks.push(track);
   state.polonaiseTracks = tracks.sort((a, b) => a - b);
-  updateKeyframe();
   showStatus(existingIndex >= 0 ? 'Rij verwijderd' : 'Rij toegevoegd');
 }
 
@@ -1173,101 +1159,79 @@ function connectControls() {
     state.mode = event.target.value;
     particleSignature = '';
     updateModeControls();
-    updateKeyframe();
     showModeStatus();
   });
   document.getElementById('size').addEventListener('input', event => {
     state.size = Number(event.target.value);
     document.getElementById('size-value').value = `${state.size} px`;
     particleSignature = '';
-    updateKeyframe();
   });
   document.getElementById('confetti-force').addEventListener('input', event => {
     state.confettiForce = Number(event.target.value);
     document.getElementById('confetti-force-value').value =
       `${round(state.confettiForce * 100)}%`;
-    updateKeyframe();
   });
   document.getElementById('random-stroke-colors').addEventListener('change', event => {
     state.randomStrokeColors = event.target.checked;
-    updateKeyframe();
   });
   document.getElementById('debug-hitboxes').addEventListener('change', event => {
     state.debugHitboxes = event.target.checked;
-    updateKeyframe();
   });
   document.getElementById('party-motion').addEventListener('input', event => {
     state.rollSpeed = Number(event.target.value);
     document.getElementById('party-motion-value').value = `${state.rollSpeed}%`;
     document.getElementById('vary-speed').value = state.rollSpeed;
     document.getElementById('vary-speed-value').value = `${state.rollSpeed}%`;
-    updateKeyframe();
   });
   document.getElementById('party-frequency').addEventListener('input', event => {
     state.partyFrequency = Number(event.target.value);
     document.getElementById('party-frequency-value').value = `${state.partyFrequency}%`;
-    updateKeyframe();
   });
   document.getElementById('party-variation').addEventListener('input', event => {
     state.partyVariation = Number(event.target.value);
     document.getElementById('party-variation-value').value = `${state.partyVariation}%`;
-    updateKeyframe();
   });
   document.getElementById('party-density').addEventListener('input', event => {
     state.partyDensity = Number(event.target.value);
     document.getElementById('party-density-value').value = `${state.partyDensity}%`;
     tileSignature = '';
-    updateKeyframe();
   });
   variantControl.addEventListener('change', event => {
     state.logoVariant = event.target.value;
     particleSignature = '';
     updateModeControls();
-    updateKeyframe();
   });
   document.getElementById('vary-speed').addEventListener('input', event => {
     state.rollSpeed = Number(event.target.value);
     document.getElementById('vary-speed-value').value = `${state.rollSpeed}%`;
     document.getElementById('party-motion').value = state.rollSpeed;
     document.getElementById('party-motion-value').value = `${state.rollSpeed}%`;
-    updateKeyframe();
   });
   document.getElementById('logo-text').addEventListener('input', event => {
     state.logoText = event.target.value;
     particleSignature = '';
-    updateKeyframe();
   });
   document.getElementById('direction').querySelectorAll('button').forEach(button => {
     button.addEventListener('click', () => {
       state.direction = button.dataset.value;
       state.polonaiseTracks = null;
       syncDirectionButtons();
-      updateKeyframe();
     });
   });
   document.getElementById('polonaise-pattern').querySelectorAll('button').forEach(button => {
     button.addEventListener('click', () => {
       state.polonaisePattern = button.dataset.value;
       syncPolonaisePatternButtons();
-      updateKeyframe();
     });
   });
   document.getElementById('clear-streamers').addEventListener('click', () => {
     state.garlands = [];
     drawingGarlandIndex = -1;
-    updateKeyframe();
     showStatus('Slingers gewist');
   });
 
   connectColors('foreground-colors', 'foreground');
   connectColors('background-colors', 'background');
-  document.getElementById('easing').addEventListener('change', updateKeyframe);
-  document.getElementById('duration').addEventListener('change', normaliseTiming);
-  document.getElementById('animation-duration').addEventListener('change', normaliseTiming);
-  document.getElementById('add-keyframe').addEventListener('click', addKeyframe);
-  document.getElementById('remove-keyframe').addEventListener('click', removeKeyframe);
-  document.getElementById('keyframe-list').addEventListener('change', loadKeyframe);
-  document.getElementById('play').addEventListener('click', togglePlayback);
   document.getElementById('canvas-width').addEventListener('change', resizeFromInputs);
   document.getElementById('canvas-height').addEventListener('change', resizeFromInputs);
   document.getElementById('export-png').addEventListener('click', exportPNG);
@@ -1280,7 +1244,6 @@ function connectColors(containerId, property) {
     button.addEventListener('click', () => {
       state[property] = button.dataset.color;
       setActiveColor(container, state[property]);
-      updateKeyframe();
     });
   });
 }
@@ -1325,99 +1288,6 @@ function showModeStatus() {
   showStatus(messages[state.mode]);
 }
 
-function cloneState(source = state) {
-  return {
-    ...source,
-    polonaisePattern: source.polonaisePattern || 'continuous',
-    polonaiseTracks: Array.isArray(source.polonaiseTracks)
-      ? [...source.polonaiseTracks]
-      : null,
-    confettiForce: Number(source.confettiForce) || 1,
-    randomStrokeColors: Boolean(source.randomStrokeColors),
-    debugHitboxes: Boolean(source.debugHitboxes),
-    rollSpeed: Number(source.rollSpeed ?? source.partyMotion ?? source.varySpeed ?? 50),
-    partyFrequency: Number(source.partyFrequency ?? 35),
-    partyVariation: Number(source.partyVariation ?? 50),
-    partyDensity: Number(source.partyDensity ?? 50),
-    garlands: (source.garlands || []).map(points => points.map(point => ({ ...point })))
-  };
-}
-
-function timingFromControls() {
-  const duration = max(100, Number(document.getElementById('duration').value) || DEFAULT_DURATION);
-  const animationDuration = constrain(
-    Number(document.getElementById('animation-duration').value) || DEFAULT_ANIMATION_DURATION,
-    100,
-    duration
-  );
-  return {
-    duration,
-    animationDuration,
-    easing: document.getElementById('easing').value || 'easeInOut'
-  };
-}
-
-function normaliseTiming() {
-  const timing = timingFromControls();
-  document.getElementById('duration').value = timing.duration;
-  document.getElementById('animation-duration').value = timing.animationDuration;
-  updateKeyframe();
-}
-
-function addKeyframe() {
-  keyframes.push({ ...cloneState(), ...timingFromControls() });
-  selectedKeyframe = keyframes.length - 1;
-  refreshKeyframeList();
-  showStatus('Keyframe toegevoegd');
-}
-
-function updateKeyframe() {
-  if (!keyframes[selectedKeyframe]) return;
-  keyframes[selectedKeyframe] = { ...cloneState(), ...timingFromControls() };
-  refreshKeyframeList();
-}
-
-function removeKeyframe() {
-  if (keyframes.length <= 1) return;
-  keyframes.splice(selectedKeyframe, 1);
-  selectedKeyframe = min(selectedKeyframe, keyframes.length - 1);
-  state = cloneState(keyframes[selectedKeyframe]);
-  particleSignature = '';
-  syncControls();
-  showStatus('Keyframe verwijderd');
-}
-
-function loadKeyframe() {
-  const index = Number(document.getElementById('keyframe-list').value);
-  if (!keyframes[index]) return;
-  selectedKeyframe = index;
-  state = cloneState(keyframes[index]);
-  drawingGarlandIndex = -1;
-  particleSignature = '';
-  syncControls();
-}
-
-function refreshKeyframeList() {
-  const list = document.getElementById('keyframe-list');
-  list.innerHTML = '';
-  keyframes.forEach((keyframe, index) => {
-    const option = document.createElement('option');
-    option.value = index;
-    option.selected = index === selectedKeyframe;
-    option.textContent = `Keyframe ${index + 1} · ${modeLabel(keyframe.mode)} · ${keyframe.duration || DEFAULT_DURATION} ms`;
-    list.appendChild(option);
-  });
-}
-
-function modeLabel(mode) {
-  return {
-    confetti: 'Confetti',
-    polonaise: 'Polonaise',
-    streamers: 'Slingers',
-    party: 'Party'
-  }[mode] || 'Confetti';
-}
-
 function syncControls() {
   document.getElementById('mode').value = state.mode;
   document.getElementById('size').value = state.size;
@@ -1439,104 +1309,11 @@ function syncControls() {
   document.getElementById('party-density-value').value = `${round(state.partyDensity ?? 50)}%`;
   document.getElementById('vary-speed').value = state.rollSpeed ?? 50;
   document.getElementById('vary-speed-value').value = `${round(state.rollSpeed ?? 50)}%`;
-  document.getElementById('duration').value = keyframes[selectedKeyframe]?.duration || DEFAULT_DURATION;
-  document.getElementById('animation-duration').value = keyframes[selectedKeyframe]?.animationDuration || DEFAULT_ANIMATION_DURATION;
-  document.getElementById('easing').value = keyframes[selectedKeyframe]?.easing || 'easeInOut';
   setActiveColor(document.getElementById('foreground-colors'), state.foreground);
   setActiveColor(document.getElementById('background-colors'), state.background);
   syncDirectionButtons();
   syncPolonaisePatternButtons();
   updateModeControls();
-  refreshKeyframeList();
-}
-
-function playbackState(elapsed) {
-  if (!keyframes.length) return state;
-  if (keyframes.length === 1) return keyframes[0];
-  let cursor = 0;
-
-  for (let index = 0; index < keyframes.length; index++) {
-    const frame = keyframes[index];
-    const duration = max(100, Number(frame.duration) || DEFAULT_DURATION);
-    if (elapsed < cursor + duration) {
-      if (index === 0) return cloneState(frame);
-      const local = elapsed - cursor;
-      const transitionDuration = constrain(
-        Number(frame.animationDuration) || DEFAULT_ANIMATION_DURATION,
-        100,
-        duration
-      );
-      if (local >= transitionDuration) return cloneState(frame);
-      const progress = ease(local / transitionDuration, frame.easing);
-      return interpolateState(keyframes[index - 1], frame, progress);
-    }
-    cursor += duration;
-  }
-  return cloneState(keyframes[keyframes.length - 1]);
-}
-
-function interpolateState(from, to, progress) {
-  const chooseTarget = progress >= 0.5;
-  return {
-    ...(chooseTarget ? to : from),
-    size: lerp(Number(from.size), Number(to.size), progress),
-    confettiForce: lerp(
-      Number(from.confettiForce) || 1,
-      Number(to.confettiForce) || 1,
-      progress
-    ),
-    rollSpeed: lerp(
-      Number(from.rollSpeed ?? from.partyMotion ?? from.varySpeed ?? 50),
-      Number(to.rollSpeed ?? to.partyMotion ?? to.varySpeed ?? 50),
-      progress
-    ),
-    partyFrequency: lerp(
-      Number(from.partyFrequency ?? 35),
-      Number(to.partyFrequency ?? 35),
-      progress
-    ),
-    partyVariation: lerp(
-      Number(from.partyVariation ?? 50),
-      Number(to.partyVariation ?? 50),
-      progress
-    ),
-    foreground: lerpHex(from.foreground, to.foreground, progress),
-    background: lerpHex(from.background, to.background, progress)
-  };
-}
-
-function ease(value, type) {
-  const t = constrain(value, 0, 1);
-  if (type === 'easeOut') return 1 - pow(1 - t, 3);
-  if (type === 'easeInOut') {
-    return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2;
-  }
-  return t;
-}
-
-function lerpHex(from, to, progress) {
-  return lerpColor(color(from), color(to), progress).toString('#rrggbb');
-}
-
-function togglePlayback() {
-  if (playing) return stopPlayback();
-  if (!keyframes.length) return;
-  particleSignature = '';
-  playing = true;
-  animationStart = millis();
-  document.getElementById('play').textContent = 'Stop';
-}
-
-function stopPlayback() {
-  playing = false;
-  particleSignature = '';
-  document.getElementById('play').textContent = 'Play';
-}
-
-function animationDuration() {
-  return keyframes.reduce((total, frame) => (
-    total + max(100, Number(frame.duration) || DEFAULT_DURATION)
-  ), 0);
 }
 
 function resizeFromInputs() {
@@ -1545,13 +1322,10 @@ function resizeFromInputs() {
   if (newWidth === width && newHeight === height) return;
   const scaleX = newWidth / width;
   const scaleY = newHeight / height;
-  stopPlayback();
-  [state, ...keyframes].forEach(source => {
-    source.garlands = (source.garlands || []).map(points => points.map(point => ({
-      x: point.x * scaleX,
-      y: point.y * scaleY
-    })));
-  });
+  state.garlands = (state.garlands || []).map(points => points.map(point => ({
+    x: point.x * scaleX,
+    y: point.y * scaleY
+  })));
   resizeCanvas(newWidth, newHeight);
   clearLogoCache();
   particleSignature = '';
@@ -1586,7 +1360,7 @@ function exportPNG() {
 }
 
 function exportMP4() {
-  if (!keyframes.length) return;
+  if (exporting) return;
   if (!window.MediaRecorder || !canvasElement.captureStream) {
     return showStatus('MP4-export wordt niet ondersteund');
   }
@@ -1594,8 +1368,15 @@ function exportMP4() {
     .find(type => MediaRecorder.isTypeSupported(type));
   if (!mimeType) return showStatus('MP4-export wordt niet ondersteund in deze browser');
 
+  const durationSeconds = constrain(
+    Number(document.getElementById('export-duration').value) || 5,
+    1,
+    120
+  );
+  document.getElementById('export-duration').value = durationSeconds;
   const stream = canvasElement.captureStream(60);
   const chunks = [];
+  const exportButton = document.getElementById('export-mp4');
   const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 10000000 });
   recorder.addEventListener('dataavailable', event => {
     if (event.data.size) chunks.push(event.data);
@@ -1610,16 +1391,17 @@ function exportMP4() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     stream.getTracks().forEach(track => track.stop());
     exporting = false;
-    particleSignature = '';
+    exportButton.disabled = false;
+    exportButton.textContent = 'MP4';
     showStatus('MP4 geëxporteerd');
   });
 
-  stopPlayback();
   exporting = true;
-  animationStart = millis();
+  exportButton.disabled = true;
+  exportButton.textContent = 'Opnemen…';
   recorder.start();
-  showStatus('MP4 wordt gemaakt…');
-  setTimeout(() => recorder.stop(), animationDuration() + 100);
+  showStatus(`Opname gestart · ${durationSeconds} seconden`);
+  setTimeout(() => recorder.stop(), durationSeconds * 1000);
 }
 
 function showStatus(message) {

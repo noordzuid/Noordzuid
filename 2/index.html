@@ -39,7 +39,7 @@
             </div>
             <div class="control">
               <label for="debug-hitboxes">Debug hitboxes</label>
-              <input id="debug-hitboxes" type="checkbox" checked/>
+              <input id="debug-hitboxes" type="checkbox"/>
             </div>
           </div>
 
@@ -155,45 +155,12 @@
         </section>
 
         <section class="section">
-          <h2>Keyframes</h2>
-
-          <div class="control">
-            <label for="easing">Easing</label>
-            <select id="easing">
-              <option value="linear">Linear</option>
-              <option value="easeInOut" selected>Ease in-out</option>
-              <option value="easeOut">Ease out</option>
-            </select>
-          </div>
-
-          <div class="control align-start">
-            <label for="keyframe-list">Keyframes</label>
-            <select id="keyframe-list" size="5"></select>
-          </div>
-
-          <div class="keyframe-buttons">
-            <button id="add-keyframe" aria-label="Keyframe toevoegen">+</button>
-            <button id="remove-keyframe" aria-label="Keyframe verwijderen">−</button>
-          </div>
-
-          <div class="control">
-            <label for="duration">Lengte keyframe</label>
-            <input id="duration" type="number" min="100" step="100" value="1200" />
-          </div>
-
-          <div class="control">
-            <label for="animation-duration">Lengte animatie</label>
-            <input id="animation-duration" type="number" min="100" step="100" value="600" />
-          </div>
-
-          <div class="control">
-            <span></span>
-            <button id="play">Play</button>
-          </div>
-        </section>
-
-        <section class="section">
           <h2>Export</h2>
+
+          <div class="control">
+            <label for="export-duration">Lengte (sec)</label>
+            <input id="export-duration" type="number" min="1" max="120" step="0.5" value="5" />
+          </div>
 
           <div class="control">
             <label for="canvas-width">Breedte</label>
