@@ -28,7 +28,6 @@ let state = {
   logoLayout: 'horizontal',
   noiseMotion: 'playful',
   noiseDensity: 'balanced',
-  fall: false,
   foreground: '#FF8D8C',
   background: '#270C13',
   logos: [
@@ -378,7 +377,7 @@ function drawLogo(logo, drawingState, grid, logoIndex) {
   translate(x, y);
   if (logoVariant !== 'text') {
     rotate(radians(logo.rotation));
-  } else if (drawingState.mode === 'noise') {
+  } else if (drawingState.mode === 'noise' || drawingState.mode === 'confetti') {
     rotate(radians(logo.rotation));
   } else if (Number.isFinite(logo.textRotation)) {
     rotate(radians(logo.textRotation));
@@ -733,6 +732,11 @@ function mousePressed(event) {
   ));
   const grid = viewGridMetrics({ ...interactionState, logos: interactionLogos });
 
+  if (state.mode === 'confetti' && !playing) {
+    pushConfetti(canvasX, canvasY);
+    return false;
+  }
+
   if (
     canvasX < grid.left ||
     canvasX > grid.left + grid.gridWidth ||
@@ -801,11 +805,6 @@ function mousePressed(event) {
 
   if (!state.logos.length) {
     showStatus('Voeg eerst een logo toe');
-    return;
-  }
-
-  if (isFalling(state)) {
-    showStatus('Valmodus beweegt vanzelf');
     return;
   }
 
@@ -1174,40 +1173,39 @@ function connectControls() {
       nextNoiseMoveAt = millis() + 250;
     }
     if (state.logoVariant === 'text') preloadTextGlyphs(state.logoText);
-    if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
+    if (state.mode === 'confetti') {
+      applyConfetti();
+    } else if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
       applyLogoPreset();
     } else {
       assignTextCharacters(state, state.logos);
     }
     updateTextControls();
-    autoUpdateKeyframe();
+    autoUpdateKeyframe({ preserveFallLayout: state.mode !== 'confetti' });
   });
   document.getElementById('logo-text').addEventListener('input', event => {
     state.logoText = event.target.value;
     preloadTextGlyphs(state.logoText);
-    if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
+    if (state.mode === 'confetti') {
+      applyConfetti();
+    } else if (state.mode === 'logo' && state.logoVariant === 'text' && state.textRepeat === false) {
       applyLogoPreset();
     } else {
       assignTextCharacters(state, state.logos);
     }
-    autoUpdateKeyframe();
+    autoUpdateKeyframe({ preserveFallLayout: state.mode !== 'confetti' });
   });
   document.getElementById('text-once').addEventListener('change', event => {
     state.textRepeat = !event.target.checked;
-    if (state.mode === 'logo') applyLogoPreset();
+    if (state.mode === 'confetti') applyConfetti();
+    else if (state.mode === 'logo') applyLogoPreset();
     else assignTextCharacters(state, state.logos);
     if (isFalling(state)) resetFallBodies();
-    autoUpdateKeyframe();
+    autoUpdateKeyframe({ preserveFallLayout: state.mode !== 'confetti' });
   });
 
   modeControl.addEventListener('change', event => {
     setMode(event.target.value);
-    if (isFalling(state)) {
-      // The newly selected mode/layout is now the state to restore when Fall
-      // is switched off; do not keep the snapshot from when Fall began.
-      state.preFallLogos = state.logos.map(logo => ({ ...logo }));
-      fallResume = null;
-    }
     autoUpdateKeyframe({ preserveFallLayout: false });
   });
 
@@ -1287,38 +1285,6 @@ function connectControls() {
       });
     });
   });
-  document.getElementById('fall').addEventListener('change', event => {
-    const fallen = cloneState(state);
-    const departingBodies = fallBodies.map(body => ({
-      ...body,
-      bounds: { ...body.bounds }
-    }));
-    liveFallReturn = null;
-    state.fall = event.target.checked;
-    if (state.fall) {
-      state.preFallLogos = state.logos.map(logo => ({ ...logo }));
-      fallResume = { moves, pausedAt: millis(), nextMoveAt: nextNoiseMoveAt };
-    }
-    moves = {};
-    fallBodies = [];
-    playbackFallActive = false;
-    if (state.fall) resetFallBodies();
-    else {
-      const original = state.preFallLogos || keyframes[selectedKeyframe]?.preFallLogos || keyframes[selectedKeyframe]?.logos;
-      if (original) state.logos = original.map(logo => ({ ...logo }));
-      liveFallReturn = {
-        source: fallen,
-        items: fallReturnItems(fallen, state),
-        bodies: departingBodies.length ? departingBodies : createFallBodies(fallen),
-        lastFallUpdate: millis(),
-        start: millis(),
-        duration: timingFromControls().animationDuration
-      };
-      fallResume = null;
-    }
-    autoUpdateKeyframe({ preserveFallLayout: false });
-  });
-
   connectColors('foreground-colors', 'foreground');
   connectColors('background-colors', 'background');
   document.getElementById('add-keyframe').addEventListener('click', addKeyframe);
@@ -1401,12 +1367,14 @@ function setMode(mode) {
     applyLogoPreset();
   } else if (mode === 'pattern') {
     applyPattern();
+  } else if (mode === 'confetti') {
+    applyConfetti();
   }
   if (isFalling(state)) resetFallBodies();
 }
 
 function updateModeControls() {
-  document.getElementById('mode-settings').hidden = false;
+  document.getElementById('mode-settings').hidden = state.mode === 'confetti';
   ['pattern', 'noise', 'logo'].forEach(mode => {
     document.getElementById(`${mode}-controls`).hidden = state.mode !== mode;
   });
@@ -1415,6 +1383,45 @@ function updateModeControls() {
 
 function updateTextControls() {
   document.getElementById('text-controls').hidden = state.logoVariant !== 'text';
+}
+
+function applyConfetti() {
+  const grid = gridMetrics(state.gridSize);
+  const characters = textCharacters(state);
+  const textOnce = state.logoVariant === 'text' && state.textRepeat === false;
+  const amount = textOnce
+    ? characters.length
+    : constrain(round(width * height / max(1, grid.pitch * grid.pitch) * 0.09), 14, 36);
+  const marginX = min(1.2, max(0.25, grid.cols / 5));
+  const marginY = min(1.2, max(0.25, grid.rows / 5));
+  const spanX = max(0, grid.cols - 1 - marginX * 2);
+  const spanY = max(0, grid.rows - 1 - marginY * 2);
+
+  state.mode = 'confetti';
+  state.focusOnLogo = false;
+  state.logos = Array.from({ length: amount }, (_, index) => {
+    const col = marginX + ((index * 0.61803398875 + 0.17) % 1) * spanX;
+    const row = marginY + ((index * 0.38196601125 + 0.31) % 1) * spanY;
+    const logo = {
+      col,
+      row,
+      rotation: (index * 137.5) % 360,
+      glyphIndex: index
+    };
+
+    if (state.logoVariant === 'text') {
+      logo.textCharacter = characters[index % characters.length];
+      logo.styleVariant = 'text';
+    } else if (state.logoVariant === 'vary') {
+      logo.variant = noiseVariantFor(round(col), round(row), 0, index);
+    }
+    return logo;
+  });
+
+  selectedLogo = 0;
+  moves = {};
+  resetFallBodies(state);
+  showStatus('Klik in het canvas om de confetti een duw te geven');
 }
 
 function applyNoiseField() {
@@ -1688,7 +1695,7 @@ function playbackNoiseState(drawingState) {
 }
 
 function isFalling(source = state) {
-  return Boolean(source.fall) || source.mode === 'fall';
+  return source.mode === 'confetti' || Boolean(source.fall) || source.mode === 'fall';
 }
 
 function createFallBodies(sourceState = state) {
@@ -1703,7 +1710,11 @@ function createFallBodies(sourceState = state) {
     bottom: viewportTop + height
   };
 
-  if (sourceState.logoVariant === 'text' && sourceState.textRepeat === false) {
+  if (
+    sourceState.mode !== 'confetti' &&
+    sourceState.logoVariant === 'text' &&
+    sourceState.textRepeat === false
+  ) {
     const characters = textCharacters(sourceState);
     const fittedCell = min(
       grid.cell,
@@ -1754,8 +1765,9 @@ function createFallBodies(sourceState = state) {
     return {
       x: constrain(center.x, bounds.left + extent, bounds.right - extent),
       y: constrain(center.y, bounds.top + extent, bounds.bottom - extent),
-      vx: sin((index + 1) * 2.17) * 18 * (1.15 - weight / 150),
-      vy: 0,
+      vx: sin((index + 1) * 2.17) * (sourceState.mode === 'confetti' ? 70 : 18) *
+        (1.15 - weight / 150),
+      vy: sourceState.mode === 'confetti' ? -30 - 55 * ((index * 0.37) % 1) : 0,
       rotation: logo.rotation,
       angularVelocity: sin((index + 1) * 1.37) * 4,
       weight,
@@ -1776,6 +1788,39 @@ function createFallBodies(sourceState = state) {
 function resetFallBodies(sourceState = state) {
   fallBodies = createFallBodies(sourceState);
   lastFallUpdate = millis();
+}
+
+function pushConfetti(canvasX, canvasY) {
+  if (!fallBodies.length) resetFallBodies(state);
+  if (!fallBodies.length) return;
+
+  const grid = gridMetrics(state.gridSize);
+  const view = viewGridMetrics(state);
+  const clickX = canvasX + grid.left - view.left;
+  const clickY = canvasY + grid.top - view.top;
+  const reach = max(width, height) * 0.7;
+
+  fallBodies.forEach((body, index) => {
+    let dx = body.x - clickX;
+    let dy = body.y - clickY;
+    let distanceFromClick = sqrt(dx * dx + dy * dy);
+    if (distanceFromClick < 1) {
+      const angle = index * 2.399963;
+      dx = cos(angle);
+      dy = sin(angle);
+      distanceFromClick = 1;
+    }
+    const force = 1050 * pow(max(0.16, 1 - distanceFromClick / reach), 1.5);
+    body.vx += dx / distanceFromClick * force;
+    body.vy += dy / distanceFromClick * force - 180;
+    body.angularVelocity = constrain(
+      body.angularVelocity + sin((index + 1) * 1.91) * 7,
+      -14,
+      14
+    );
+  });
+  lastFallUpdate = millis();
+  showStatus('Confetti! Klik nog een keer voor een nieuwe duw');
 }
 
 function updateFallMotion() {
@@ -2116,11 +2161,11 @@ function setActiveColor(container, colorValue) {
 }
 
 function cloneState(source = state) {
+  const legacyConfetti = source.mode === 'fall' || Boolean(source.fall);
+  const { fall: _legacyFall, preFallLogos: _legacyLayout, ...rest } = source;
   return {
-    ...source,
-    mode: source.mode === 'fall' ? 'logo' : source.mode,
-    fall: isFalling(source),
-    preFallLogos: source.preFallLogos?.map(logo => ({ ...logo })),
+    ...rest,
+    mode: legacyConfetti ? 'confetti' : source.mode,
     logos: source.logos.map(logo => ({ ...logo }))
   };
 }
@@ -2190,7 +2235,7 @@ function refreshKeyframeList() {
   keyframes.forEach((keyframe, index) => {
     const option = document.createElement('option');
     option.value = index;
-    option.textContent = `Keyframe ${index + 1} · ${modeLabel(keyframe.mode)}${isFalling(keyframe) ? ' · Val' : ''} · ${keyframeDuration(index)} ms`;
+    option.textContent = `Keyframe ${index + 1} · ${modeLabel(keyframe.mode)} · ${keyframeDuration(index)} ms`;
     option.selected = index === selectedKeyframe;
     list.appendChild(option);
   });
@@ -2201,7 +2246,8 @@ function modeLabel(mode) {
     pattern: 'Patroon',
     noise: 'Noise',
     logo: 'Logo',
-    fall: 'Val'
+    confetti: 'Confetti',
+    fall: 'Confetti'
   }[mode] || 'Patroon';
 }
 
@@ -2212,12 +2258,14 @@ function loadKeyframe() {
   selectedKeyframe = targetIndex;
   state = cloneState(keyframes[selectedKeyframe]);
   const previewDuration = keyframeAnimationDuration(selectedKeyframe);
-  keyframePreviewTransition = {
-    source: { ...source, duration: 100, animationDuration: 100 },
-    target: keyframes[selectedKeyframe],
-    start: millis(),
-    duration: previewDuration
-  };
+  keyframePreviewTransition = source.mode === 'confetti' || state.mode === 'confetti'
+    ? null
+    : {
+        source: { ...source, duration: 100, animationDuration: 100 },
+        target: keyframes[selectedKeyframe],
+        start: millis(),
+        duration: previewDuration
+      };
   fallResume = null;
   liveFallReturn = null;
   lastPlaybackFallState = null;
@@ -2227,12 +2275,16 @@ function loadKeyframe() {
   playbackFallActive = false;
   playbackNoiseRuntime = null;
   playbackNoiseSources = {};
+  if (state.mode === 'confetti') resetFallBodies(state);
   syncControls();
 }
 
 function keyframePreviewState(elapsed) {
   const preview = keyframePreviewTransition;
   if (!preview) return state;
+  if (preview.source.mode === 'confetti' || preview.target.mode === 'confetti') {
+    return cloneState(preview.target);
+  }
   const savedKeyframes = keyframes;
   keyframes = [preview.source, preview.target];
   try {
@@ -2251,7 +2303,6 @@ function syncControls() {
   document.getElementById('logo-variant').value = state.logoVariant || 'original';
   document.getElementById('logo-text').value = state.logoText || 'NOORDZUID';
   document.getElementById('text-once').checked = state.textRepeat === false;
-  document.getElementById('fall').checked = isFalling(state);
   document.getElementById('duration').value = keyframeDuration(selectedKeyframe);
   document.getElementById('animation-duration').value = keyframeAnimationDuration(selectedKeyframe);
   easingType = keyframes[selectedKeyframe]?.easing || easingType;
@@ -3003,6 +3054,12 @@ function playbackState(elapsed) {
   const colorProgress = constrain(eased, 0, 1);
   const currentGridSize = lerp(from.gridSize, to.gridSize, colorProgress);
   const currentGrid = gridMetrics(currentGridSize);
+
+  // Confetti is an autonomous physics scene. It cuts directly to the next
+  // keyframe instead of using the grid/envelope transition system.
+  if (from.mode === 'confetti' || to.mode === 'confetti') {
+    return cloneState(to);
+  }
 
   // Freeze the actual fallen pose once. It first clears the bottom edge; only
   // after that does the next layout enter through its envelopes.
