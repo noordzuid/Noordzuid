@@ -23,12 +23,12 @@ const COLOR_PALETTE = [
   '#8BCAFF', '#D4F2AA', '#053530', '#EBE8E4'
 ];
 
-// Pas hier de tekst-hitbox per letter aan. 1 = de automatisch gemeten grootte.
+// Pas hier de tekst-hitbox per letter of cijfer aan. 1 = de automatisch gemeten grootte.
 // width/height schalen de box; y verplaatst de letter binnen de box (+ = omlaag).
 // Dit is extra ruimte per kant, als deel van de ingestelde Grootte (0.04 = 4%).
 const TEXT_HITBOX_PADDING = 0.05;
 
-const LETTER_HITBOX_SIZES = {
+const CHARACTER_HITBOX_SIZES = {
   A: { width: 0.9, height: 1.1 },
   B: { width: 0.9, height: 1 },
   C: { width: 0.9, height: 1 },
@@ -54,20 +54,30 @@ const LETTER_HITBOX_SIZES = {
   W: { width: 1, height: 0.8, y: 0.075 },
   X: { width: 1, height: 0.8, y: 0.075 },
   Y: { width: 1, height: 1.0 },
-  Z: { width: 1, height: 0.8, y: 0.075 }
+  Z: { width: 1, height: 0.8, y: 0.075 },
+  '0': { width: 0.95, height: 0.93, y: 0 },
+  '1': { width: 0.85, height: 0.8, y: 0.08 },
+  '2': { width: 0.9, height: 0.8, y: 0.08 },
+  '3': { width: 0.9, height: 0.95, y: 0 },
+  '4': { width: 0.9, height: 0.8, y: 0.08 },
+  '5': { width: 0.9, height: 0.9, y: 0 },
+  '6': { width: 0.9, height: 0.9, y: 0 },
+  '7': { width: 0.9, height: 0.8, y: 0.08 },
+  '8': { width: 0.9, height: 0.93, y: 0 },
+  '9': { width: 0.9, height: 0.93, y: 0 }
 };
-const DEFAULT_LETTER_HITBOX_SIZE = { width: 1, height: 1, y: 0 };
+const DEFAULT_CHARACTER_HITBOX_SIZE = { width: 1, height: 1, y: 0 };
 let state = {
   mode: 'confetti',
   size: 200,
   logoVariant: 'text',
-  logoText: 'abcdefghijklmnopqrstuvwxyz',
+  logoText: '1234567890',
   direction: 'left',
   polonaisePattern: 'continuous',
   polonaiseTracks: null,
   confettiForce: 2,
   randomStrokeColors: false,
-  debugHitboxes: false,
+  debugHitboxes: true,
   partyFrequency: 35,
   partyVariation: 0,
   partyDensity: 50,
@@ -342,8 +352,8 @@ function createTextParticles(source, characters, renderSize = source.size) {
 function textParticleBounds(source, character) {
   const glyph = textGlyphMetrics(source.size, character);
   const padding = max(0, source.size * TEXT_HITBOX_PADDING);
-  const hitboxSize = LETTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
-    DEFAULT_LETTER_HITBOX_SIZE;
+  const hitboxSize = CHARACTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
+    DEFAULT_CHARACTER_HITBOX_SIZE;
   return {
     halfWidth: max(2, (glyph.width / 2 + padding) * hitboxSize.width),
     halfHeight: max(3, (glyph.height / 2 + padding) * hitboxSize.height)
@@ -1012,8 +1022,8 @@ function drawMark(source, x, y, size, rotation, index, variantOverride, characte
   if (variant === 'text') {
     const character = characterOverride ?? textCharacterAt(source, index);
     const glyph = textGlyphMetrics(size, character);
-    const hitboxSize = LETTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
-      DEFAULT_LETTER_HITBOX_SIZE;
+    const hitboxSize = CHARACTER_HITBOX_SIZES[character.toLocaleUpperCase('nl-NL')] ||
+      DEFAULT_CHARACTER_HITBOX_SIZE;
     fill(source.foreground);
     textAlign(LEFT, BASELINE);
     textFont(brandFont);
