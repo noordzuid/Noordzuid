@@ -77,6 +77,7 @@ let state = {
   polonaiseTracks: null,
   confettiForce: 2,
   randomStrokeColors: false,
+  randomStrokePalette: [...COLOR_PALETTE],
   debugHitboxes: true,
   partyFrequency: 35,
   partyVariation: 0,
@@ -579,7 +580,7 @@ function spawnStroke(x, y) {
     kind: 'stroke',
     strokeIndex,
     color: state.randomStrokeColors
-      ? COLOR_PALETTE[floor(random(COLOR_PALETTE.length))]
+      ? randomStrokeColor(state)
       : null,
     renderWidth,
     renderHeight,
@@ -601,8 +602,9 @@ function spawnStroke(x, y) {
 }
 
 function drawStrokeParticle(source, particle) {
-  if (source.randomStrokeColors && !particle.color) {
-    particle.color = COLOR_PALETTE[floor(random(COLOR_PALETTE.length))];
+  const palette = activeStrokePalette(source);
+  if (source.randomStrokeColors && (!particle.color || !palette.includes(particle.color))) {
+    particle.color = randomStrokeColor(source);
   }
   const strokeColor = source.randomStrokeColors ? particle.color : source.foreground;
   const stroke = renderedStroke(particle.strokeIndex, strokeColor);
@@ -611,6 +613,19 @@ function drawStrokeParticle(source, particle) {
   rotate(radians(particle.rotation));
   image(stroke, 0, 0, particle.renderWidth, particle.renderHeight);
   pop();
+}
+
+function activeStrokePalette(source = state) {
+  const selected = Array.isArray(source.randomStrokePalette)
+    ? source.randomStrokePalette
+    : COLOR_PALETTE;
+  const palette = COLOR_PALETTE.filter(colorValue => selected.includes(colorValue));
+  return palette.length ? palette : COLOR_PALETTE;
+}
+
+function randomStrokeColor(source = state) {
+  const palette = activeStrokePalette(source);
+  return palette[floor(random(palette.length))];
 }
 
 function renderedStroke(index, foreground) {
@@ -1169,6 +1184,7 @@ function connectControls() {
     state.mode = event.target.value;
     particleSignature = '';
     updateModeControls();
+    syncForegroundColors();
     showModeStatus();
   });
   document.getElementById('size').addEventListener('input', event => {
@@ -1183,6 +1199,7 @@ function connectControls() {
   });
   document.getElementById('random-stroke-colors').addEventListener('change', event => {
     state.randomStrokeColors = event.target.checked;
+    syncForegroundColors();
   });
   document.getElementById('debug-hitboxes').addEventListener('change', event => {
     state.debugHitboxes = event.target.checked;
@@ -1252,9 +1269,41 @@ function connectColors(containerId, property) {
   const container = document.getElementById(containerId);
   container.querySelectorAll('.swatch').forEach(button => {
     button.addEventListener('click', () => {
+      if (property === 'foreground' && state.mode === 'confetti' && state.randomStrokeColors) {
+        toggleRandomStrokeColor(button.dataset.color);
+        return;
+      }
       state[property] = button.dataset.color;
       setActiveColor(container, state[property]);
     });
+  });
+}
+
+function toggleRandomStrokeColor(colorValue) {
+  const selected = activeStrokePalette(state);
+  const isSelected = selected.includes(colorValue);
+  if (isSelected && selected.length === 1) {
+    showStatus('Minimaal één random kleur moet aan blijven');
+    return;
+  }
+  state.randomStrokePalette = isSelected
+    ? selected.filter(value => value !== colorValue)
+    : COLOR_PALETTE.filter(value => selected.includes(value) || value === colorValue);
+  syncForegroundColors();
+}
+
+function syncForegroundColors() {
+  const container = document.getElementById('foreground-colors');
+  const randomFilter = state.mode === 'confetti' && state.randomStrokeColors;
+  const palette = activeStrokePalette(state);
+  container.classList.toggle('random-filter', randomFilter);
+  document.getElementById('foreground-label').textContent = randomFilter ? 'Kleuren' : 'Voorgrond';
+  container.querySelectorAll('.swatch').forEach(button => {
+    const selected = randomFilter
+      ? palette.includes(button.dataset.color)
+      : button.dataset.color === state.foreground;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
   });
 }
 
@@ -1319,7 +1368,7 @@ function syncControls() {
   document.getElementById('party-density-value').value = `${round(state.partyDensity ?? 50)}%`;
   document.getElementById('vary-speed').value = state.rollSpeed ?? 50;
   document.getElementById('vary-speed-value').value = `${round(state.rollSpeed ?? 50)}%`;
-  setActiveColor(document.getElementById('foreground-colors'), state.foreground);
+  syncForegroundColors();
   setActiveColor(document.getElementById('background-colors'), state.background);
   syncDirectionButtons();
   syncPolonaisePatternButtons();

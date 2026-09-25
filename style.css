@@ -189,6 +189,15 @@ select {
   outline: 1px solid #111111;
 }
 
+.swatches.random-filter .swatch {
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.swatches.random-filter .swatch:not(.active) {
+  opacity: 0.22;
+  transform: scale(0.72);
+}
+
 .keyframe-buttons {
   display: flex;
   gap: 6px;
