@@ -18,6 +18,8 @@ const STROKE_PATHS = [
   'streepjes.png',
   'wave.png'
 ];
+// Alle strokes krijgen deze breedte ten opzichte van Grootte; de hoogte volgt het assetformaat.
+const STROKE_WIDTH_SCALE = 0.22;
 const COLOR_PALETTE = [
   '#270C13', '#F28EFF', '#353214', '#FF8D8C', '#DDAAFF',
   '#8BCAFF', '#D4F2AA', '#053530', '#EBE8E4'
@@ -71,14 +73,14 @@ let state = {
   mode: 'confetti',
   size: 200,
   logoVariant: 'text',
-  logoText: '1234567890',
+  logoText: 'een',
   direction: 'left',
   polonaisePattern: 'continuous',
   polonaiseTracks: null,
   confettiForce: 2,
   randomStrokeColors: false,
   randomStrokePalette: [...COLOR_PALETTE],
-  debugHitboxes: true,
+  debugHitboxes: false,
   partyFrequency: 35,
   partyVariation: 0,
   partyDensity: 50,
@@ -573,8 +575,14 @@ function spawnStroke(x, y) {
   if (!strokeImages.length) return;
   const strokeIndex = floor(random(strokeImages.length));
   const imageSource = strokeImages[strokeIndex];
-  const renderHeight = min(state.size, min(width, height) * 0.72);
-  const renderWidth = renderHeight * imageSource.width / max(1, imageSource.height);
+  const strokeAspect = imageSource.height / max(1, imageSource.width);
+  const tallestStrokeAspect = strokeImages.reduce((largest, imageSource) => (
+    max(largest, imageSource.height / max(1, imageSource.width))
+  ), 1);
+  const requestedWidth = state.size * STROKE_WIDTH_SCALE;
+  const maxHeight = min(width, height) * 0.72;
+  const renderWidth = min(requestedWidth, maxHeight / tallestStrokeAspect);
+  const renderHeight = renderWidth * strokeAspect;
   const rotation = floor(random(4)) * 90;
   const particle = {
     kind: 'stroke',
