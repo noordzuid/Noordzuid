@@ -98,6 +98,7 @@ function setMode(mode) {
   $$(".mode-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
   $$(".mode-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== mode; });
   canvas.style.cursor = mode === "confetti" ? "crosshair" : mode === "polonaise" ? "grab" : "default";
+  updateColorControls();
   scene.modeChanged();
 }
 
@@ -114,7 +115,7 @@ function renderPalette(target, selector) {
     swatch.type = "button";
     swatch.className = "swatch";
     swatch.style.background = color;
-    const isExcluded = state.excludedColors.has(color) || color === state.foreground;
+    const isExcluded = state.mode === "confetti" && (state.excludedColors.has(color) || color === state.foreground);
     const exclusionLabel = isExcluded ? ", uitgesloten voor extra confetti" : "";
     swatch.title = `${color}${isExcluded ? " · niet in extra confetti" : ""}`;
     swatch.setAttribute("aria-label", `Kleur ${color}${exclusionLabel}`);
@@ -126,12 +127,14 @@ function renderPalette(target, selector) {
       scene.recolorStrokes();
       updateColorControls();
     });
-    swatch.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      if (state.excludedColors.has(color)) state.excludedColors.delete(color); else state.excludedColors.add(color);
-      scene.recolorStrokes();
-      updateColorControls();
-    });
+    if (state.mode === "confetti") {
+      swatch.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        if (state.excludedColors.has(color)) state.excludedColors.delete(color); else state.excludedColors.add(color);
+        scene.recolorStrokes();
+        updateColorControls();
+      });
+    }
     palette.append(swatch);
   }
 }

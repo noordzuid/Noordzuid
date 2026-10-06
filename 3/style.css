@@ -28,9 +28,9 @@ textarea { resize: none; padding: 10px 11px; min-height: 55px; line-height: 1.35
 select, input[type="number"] { height: 36px; padding: 0 10px; }
 textarea:focus, select:focus, input[type="number"]:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 input[type="range"] { width: 100%; height: 20px; margin: 0; appearance: none; background: transparent; cursor: pointer; }
-input[type="range"]::-webkit-slider-runnable-track { height: 6px; border: 1px solid #aaa; background: linear-gradient(to right,var(--ink) var(--fill,50%),#f1f1f1 var(--fill,50%)); border-radius: 6px; }
+input[type="range"]::-webkit-slider-runnable-track { height: 6px; border: 0px solid #aaa; background: linear-gradient(to right,var(--ink) var(--fill,50%),#f1f1f1 var(--fill,50%)); border-radius: 6px; }
 input[type="range"]::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; margin-top: -7px; border: 0; border-radius: 50%; background: var(--ink); box-shadow: none; }
-input[type="range"]::-moz-range-track { height: 4px; border: 1px solid #aaa; border-radius: 6px; background: #f1f1f1; }
+input[type="range"]::-moz-range-track { height: 4px; border: 0px solid #aaa; border-radius: 6px; background: #f1f1f1; }
 input[type="range"]::-moz-range-progress { height: 4px; background: var(--ink); }
 input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: var(--ink); }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -52,8 +52,8 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
 .palette { display: grid; grid-template-columns: repeat(9,1fr); gap: 5px; }
 .swatch { aspect-ratio: 1; border: 1px solid rgba(0,0,0,.16); border-radius: 4px; cursor: pointer; position: relative; padding: 0; }
 .swatch.is-selected { outline: 2px solid var(--ink); outline-offset: 2px; }
-.swatch.is-excluded { filter: saturate(.48); }
-.swatch.is-excluded::before { content: ""; position: absolute; top: calc(50% - 1px); left: 8%; width: 84%; height: 2px; border-radius: 2px; background: white; box-shadow: 0 0 0 1px rgba(0,0,0,.65); transform: rotate(-45deg); }
+.swatch.is-excluded { filter: grayscale(1); opacity: .32; }
+.swatch.is-excluded.is-selected { opacity: .5; }
 .scale-field { margin-top: 18px; }
 .size-row { display: grid; grid-template-columns: 1fr 26px 1fr; gap: 6px; align-items: end; }
 .size-row .field { margin-bottom: 14px; }

@@ -2,9 +2,32 @@ import { LOGOS, PALETTE, STROKES } from "./constants.js";
 
 const TAU = Math.PI * 2;
 const PARTY_PULSE_INTERVAL = 0.72;
+const ROLL_WIND_UP_DURATION = 0.38;
+const ROLL_FALL_DURATION = 0.18;
+const ROLL_REST_DURATION = 0.07;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const randomBetween = (min, max) => min + Math.random() * (max - min);
-const rollingEase = (value) => (1 - Math.cos(clamp(value, 0, 1) * Math.PI * 0.5)) ** 1.08;
+
+function rollTiming(speed = 1, variation = 1) {
+  const windUp = ROLL_WIND_UP_DURATION * variation / Math.max(speed, 0.05);
+  const fall = ROLL_FALL_DURATION;
+  const rest = ROLL_REST_DURATION;
+  return { windUp, fall, rest, duration: windUp + fall + rest };
+}
+
+function rollPhase(elapsed, timing) {
+  if (elapsed <= 0) return 0;
+  if (elapsed < timing.windUp) {
+    const progress = elapsed / timing.windUp;
+    const eased = progress * progress * (3 - 2 * progress);
+    return eased * 0.5;
+  }
+  if (elapsed < timing.windUp + timing.fall) {
+    const progress = (elapsed - timing.windUp) / timing.fall;
+    return 0.5 + progress * progress * 0.5;
+  }
+  return 1;
+}
 
 function letterGravityScale(glyph) {
   const character = glyph.toLocaleLowerCase("nl");
@@ -560,25 +583,21 @@ export class Scene {
   }
 
   advancePolonaise(dt, settings, lineIndex) {
-    const baseDuration = 0.48 / Math.max(settings.speed, 0.1);
     if (!this.polonaiseLines[lineIndex]) {
       this.polonaiseLines[lineIndex] = { step: 0, rhythmIndex: 0, beatTime: 0 };
     }
     const runtime = this.polonaiseLines[lineIndex];
     runtime.beatTime += dt;
     let beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
-    let duration = baseDuration * beat.duration;
-    while (runtime.beatTime >= duration) {
-      runtime.beatTime -= duration;
+    let timing = rollTiming(settings.speed, beat.duration);
+    while (runtime.beatTime >= timing.duration) {
+      runtime.beatTime -= timing.duration;
       runtime.step += 1;
       runtime.rhythmIndex += 1;
       beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
-      duration = baseDuration * beat.duration;
+      timing = rollTiming(settings.speed, beat.duration);
     }
-    const timeline = runtime.beatTime / Math.max(duration, 0.001);
-    const activePhase = clamp(timeline / beat.motion, 0, 1);
-    const eased = rollingEase(activePhase);
-    return { step: runtime.step, phase: eased };
+    return { step: runtime.step, phase: rollPhase(runtime.beatTime, timing) };
   }
 
   polonaiseBeat(index, intensity = 0, lineIndex = 0) {
@@ -591,7 +610,6 @@ export class Scene {
     const amount = clamp(intensity, 0, 1);
     return {
       duration: 1 + rhythmNoise * 0.14 * amount,
-      motion: 0.76 - Math.abs(rhythmNoise) * 0.05 * amount,
     };
   }
 
@@ -662,7 +680,7 @@ export class Scene {
     const frequencyNoise = (this.partyFieldValue(item.col, item.row, this.time, 1) - 0.5) * 2;
     const localSpeed = clamp(settings.speed + speedNoise * influence, 0.05, 1);
     const localFrequency = clamp(settings.frequency + frequencyNoise * influence, 0, 1);
-    return { duration: 0.42 / (0.25 + localSpeed * 0.75), frequency: localFrequency };
+    return { timing: rollTiming(0.25 + localSpeed * 0.75), frequency: localFrequency };
   }
 
   partyRollChance(item, channel = 0) {
@@ -670,7 +688,7 @@ export class Scene {
     return value - Math.floor(value);
   }
 
-  choosePartyMove(item, occupied, reserved, duration, variationChance) {
+  choosePartyMove(item, occupied, reserved, timing, variationChance) {
     const directions = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
     const directionNoise = this.partyFieldValue(item.col, item.row, this.time, 2);
     const targetAngle = directionNoise * TAU;
@@ -689,7 +707,9 @@ export class Scene {
     item.fromCol = item.col; item.fromRow = item.row;
     item.toCol = destination.col; item.toRow = destination.row;
     item.progress = 0;
-    item.duration = Math.max(0.08, duration);
+    item.elapsed = 0;
+    item.rollTiming = timing;
+    item.duration = timing.duration;
     item.variantChanged = false;
     item.nextLogo = null;
     item.startAngle = item.angle;
@@ -722,8 +742,10 @@ export class Scene {
 
     for (const item of this.party) {
       if (item.progress < 1) {
-        item.progress = Math.min(1, item.progress + dt / item.duration);
-        if (!item.variantChanged && item.nextLogo && rollingEase(item.progress) >= 0.5) {
+        item.elapsed = Math.min(item.duration, (item.elapsed || 0) + dt);
+        item.progress = Math.min(1, item.elapsed / item.duration);
+        const phase = rollPhase(item.elapsed, item.rollTiming || rollTiming(1));
+        if (!item.variantChanged && item.nextLogo && phase >= 0.5) {
           item.logo = item.nextLogo;
           item.variantChanged = true;
         }
@@ -742,7 +764,7 @@ export class Scene {
         if (item.progress < 1) continue;
         const motion = this.partyMotion(item, settings);
         if (this.partyRollChance(item) < motion.frequency) {
-          this.choosePartyMove(item, occupied, reserved, motion.duration, motion.frequency);
+          this.choosePartyMove(item, occupied, reserved, motion.timing, motion.frequency);
         }
       }
     }
@@ -750,9 +772,23 @@ export class Scene {
     for (const item of this.party) {
       const start = this.partyCellPosition(item.fromCol, item.fromRow);
       const end = this.partyCellPosition(item.toCol, item.toRow);
-      const phase = item.progress >= 1 ? 1 : rollingEase(item.progress);
-      const x = start.x + (end.x - start.x) * phase;
-      const y = start.y + (end.y - start.y) * phase;
+      const phase = item.progress >= 1 ? 1 : rollPhase(item.elapsed || 0, item.rollTiming || rollTiming(1));
+      const horizontal = item.toCol !== item.fromCol;
+      const sign = horizontal ? Math.sign(item.toCol - item.fromCol) : Math.sign(item.toRow - item.fromRow);
+      const rolled = this.tumbleStep(
+        horizontal ? start.x : start.y,
+        (horizontal ? start.y : start.x) + item.size * 0.5,
+        item.size,
+        horizontal,
+        sign || 1,
+        0,
+        phase,
+      );
+      const rollDistance = (sign || 1) * item.size;
+      const travelDistance = horizontal ? end.x - start.x : end.y - start.y;
+      const gapOffset = (travelDistance - rollDistance) * phase;
+      const x = horizontal ? rolled.x + gapOffset : rolled.x;
+      const y = horizontal ? rolled.y : rolled.y + gapOffset;
       const angle = item.startAngle + (item.targetAngle - item.startAngle) * phase;
       this.drawLogo(item.logo, x, y, item.size, angle, this.state.foreground);
     }
