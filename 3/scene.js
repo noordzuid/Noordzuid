@@ -3,14 +3,14 @@ import { LOGOS, PALETTE, STROKES } from "./constants.js";
 const TAU = Math.PI * 2;
 const PARTY_PULSE_INTERVAL = 0.72;
 const ROLL_WIND_UP_DURATION = 0.38;
-const ROLL_FALL_DURATION = 0.18;
+const ROLL_FALL_RATIO = 0.25;
 const ROLL_REST_DURATION = 0.07;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const randomBetween = (min, max) => min + Math.random() * (max - min);
 
 function rollTiming(speed = 1, variation = 1) {
   const windUp = ROLL_WIND_UP_DURATION * variation / Math.max(speed, 0.05);
-  const fall = ROLL_FALL_DURATION;
+  const fall = windUp * ROLL_FALL_RATIO;
   const rest = ROLL_REST_DURATION;
   return { windUp, fall, rest, duration: windUp + fall + rest };
 }
@@ -19,12 +19,13 @@ function rollPhase(elapsed, timing) {
   if (elapsed <= 0) return 0;
   if (elapsed < timing.windUp) {
     const progress = elapsed / timing.windUp;
-    const eased = progress * progress * (3 - 2 * progress);
-    return eased * 0.5;
+    return progress * progress * 0.5;
   }
   if (elapsed < timing.windUp + timing.fall) {
     const progress = (elapsed - timing.windUp) / timing.fall;
-    return 0.5 + progress * progress * 0.5;
+    const initialSlope = timing.fall / timing.windUp;
+    const acceleration = 0.5 - initialSlope;
+    return 0.5 + initialSlope * progress + acceleration * progress ** 2;
   }
   return 1;
 }
@@ -157,7 +158,7 @@ export class Scene {
       return {
       col: cell.col, row: cell.row,
       fromCol: cell.col, fromRow: cell.row, toCol: cell.col, toRow: cell.row,
-      progress: 1, duration: 1, variantChanged: false, nextLogo: null,
+      progress: 1, duration: 1,
       angle: baseAngle, startAngle: baseAngle, targetAngle: baseAngle,
       seed: randomBetween(0, 100), logo: this.pickLogo(index), size,
       };
@@ -254,7 +255,7 @@ export class Scene {
     particle.stableFrames = 0;
     particle.asleep = false;
     particle.hadContact = false;
-    particle.boundaryContact = false;
+    particle.sideBoundaryContact = false;
   }
 
   addStroke(x, y) {
@@ -345,7 +346,7 @@ export class Scene {
     const sleepSpeed = Math.min(width, height) * 0.018;
     for (const particle of this.confetti) {
       particle.hadContact = false;
-      particle.boundaryContact = false;
+      particle.sideBoundaryContact = false;
       particle.supported = false;
       if (particle.asleep) continue;
       const gravityScale = particle.wasSupported
@@ -371,22 +372,15 @@ export class Scene {
     for (const particle of this.confetti) {
       particle.wasSupported = particle.supported;
       if (particle.asleep) continue;
-      if (particle.boundaryContact) {
-        // A wall should absorb energy instead of feeding it back into a body
-        // that is being pushed into a corner or a dense pile.
-        particle.vx *= 0.72;
-        particle.vy *= 0.72;
-        particle.spin *= 0.48;
-      }
       this.limitParticleSpeed(particle);
       const linearSpeed = Math.hypot(particle.vx, particle.vy);
       const edgeSpeed = Math.abs(particle.spin) * particle.radius;
-      if (particle.hadContact && linearSpeed < sleepSpeed * 4 && edgeSpeed < sleepSpeed * 4) {
+      if (particle.hadContact && !particle.sideBoundaryContact && linearSpeed < sleepSpeed * 4 && edgeSpeed < sleepSpeed * 4) {
         const contactDamping = particle.type === "stroke" ? 0.8 : 0.86;
         const spinDamping = particle.type === "stroke" ? 0.64 : 0.74;
         particle.vx *= contactDamping; particle.vy *= contactDamping; particle.spin *= spinDamping;
       }
-      if (particle.hadContact && linearSpeed < sleepSpeed && edgeSpeed < sleepSpeed) particle.stableFrames += 1;
+      if (particle.hadContact && !particle.sideBoundaryContact && linearSpeed < sleepSpeed && edgeSpeed < sleepSpeed) particle.stableFrames += 1;
       else particle.stableFrames = 0;
       if (particle.stableFrames > 12) {
         particle.vx = 0; particle.vy = 0; particle.spin = 0;
@@ -401,8 +395,14 @@ export class Scene {
     const cos = Math.cos(particle.angle); const sin = Math.sin(particle.angle);
     const extentX = Math.abs(cos) * halfWidth + Math.abs(sin) * halfHeight;
     const extentY = Math.abs(sin) * halfWidth + Math.abs(cos) * halfHeight;
-    if (particle.x < extentX) this.resolveBoundaryContact(particle, 1, 0, extentX - particle.x);
-    if (particle.x > width - extentX) this.resolveBoundaryContact(particle, -1, 0, particle.x + extentX - width);
+    if (particle.x < extentX) {
+      particle.sideBoundaryContact = true;
+      this.resolveBoundaryContact(particle, 1, 0, extentX - particle.x);
+    }
+    if (particle.x > width - extentX) {
+      particle.sideBoundaryContact = true;
+      this.resolveBoundaryContact(particle, -1, 0, particle.x + extentX - width);
+    }
     if (particle.y < extentY) this.resolveBoundaryContact(particle, 0, 1, extentY - particle.y);
     if (particle.y > height - extentY) this.resolveBoundaryContact(particle, 0, -1, particle.y + extentY - height);
   }
@@ -436,7 +436,6 @@ export class Scene {
 
   resolveBoundaryContact(particle, nx, ny, penetration) {
     particle.hadContact = true;
-    particle.boundaryContact = true;
     if (ny < -0.35) particle.supported = true;
     particle.x += nx * penetration;
     particle.y += ny * penetration;
@@ -688,7 +687,7 @@ export class Scene {
     return value - Math.floor(value);
   }
 
-  choosePartyMove(item, occupied, reserved, timing, variationChance) {
+  choosePartyMove(item, occupied, reserved, timing) {
     const directions = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
     const directionNoise = this.partyFieldValue(item.col, item.row, this.time, 2);
     const targetAngle = directionNoise * TAU;
@@ -710,20 +709,9 @@ export class Scene {
     item.elapsed = 0;
     item.rollTiming = timing;
     item.duration = timing.duration;
-    item.variantChanged = false;
-    item.nextLogo = null;
     item.startAngle = item.angle;
     const turn = destination.dc !== 0 ? destination.dc : -destination.dr;
     item.targetAngle = item.angle + turn * Math.PI * 0.5;
-    if (this.state.party.logo === "variation" && this.partyRollChance(item, 1) < variationChance) {
-      const variation = this.partyFieldValue(destination.col, destination.row, this.time, 3);
-      let nextLogo = this.pickLogo(Math.floor(variation * LOGOS.length), "variation");
-      if (nextLogo === item.logo && LOGOS.length > 1) {
-        const currentIndex = LOGOS.indexOf(item.logo);
-        nextLogo = LOGOS[(currentIndex + 1) % LOGOS.length];
-      }
-      item.nextLogo = nextLogo;
-    }
     reserved.add(`${destination.col},${destination.row}`);
     return true;
   }
@@ -744,15 +732,9 @@ export class Scene {
       if (item.progress < 1) {
         item.elapsed = Math.min(item.duration, (item.elapsed || 0) + dt);
         item.progress = Math.min(1, item.elapsed / item.duration);
-        const phase = rollPhase(item.elapsed, item.rollTiming || rollTiming(1));
-        if (!item.variantChanged && item.nextLogo && phase >= 0.5) {
-          item.logo = item.nextLogo;
-          item.variantChanged = true;
-        }
         if (item.progress >= 1) {
           item.col = item.toCol; item.row = item.toRow; item.angle = item.targetAngle;
           item.seed += 0.73;
-          item.nextLogo = null;
         }
       }
     }
@@ -764,7 +746,7 @@ export class Scene {
         if (item.progress < 1) continue;
         const motion = this.partyMotion(item, settings);
         if (this.partyRollChance(item) < motion.frequency) {
-          this.choosePartyMove(item, occupied, reserved, motion.timing, motion.frequency);
+          this.choosePartyMove(item, occupied, reserved, motion.timing);
         }
       }
     }
