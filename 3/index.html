@@ -40,7 +40,7 @@
               <span>Beweging</span>
               <div class="segmented" id="alternatingControl" role="group" aria-label="Beweging"><button class="is-active" type="button" data-alternating="false">Één richting</button><button type="button" data-alternating="true">Om en om</button></div>
             </div>
-            <label class="field"><span>Ritme</span><select id="rhythm"><option value="steady">Rechttoe rechtaan</option><option value="cucaracha">La Cucaracha</option><option value="polonaise">Polonaise</option><option value="waltz">Wals</option></select></label>
+            <label class="field"><span><span>Noise</span><output id="polonaiseNoiseOutput">0%</output></span><input id="polonaiseNoise" type="range" min="0" max="100" step="1" value="0" /></label>
             <label class="field"><span><span>Snelheid</span><output id="polonaiseSpeedOutput">100%</output></span><input id="polonaiseSpeed" type="range" min="25" max="200" step="1" value="100" /></label>
             <label class="field"><span><span>Lijnen</span><output id="polonaiseLineCountOutput">3</output></span><input id="polonaiseLineCount" type="range" min="1" max="5" step="1" value="3" /></label>
           </section>
@@ -49,8 +49,9 @@
             <div class="section-heading"><h2>Party</h2></div>
             <label class="field"><span>Logo</span><select id="partyLogo"></select></label>
             <label class="field"><span><span>Noise</span><output id="noiseOutput">58%</output></span><input id="noise" type="range" min="0" max="100" step="1" value="58" /></label>
+            <label class="field"><span><span>Frequentie</span><output id="partyFrequencyOutput">50%</output></span><input id="partyFrequency" type="range" min="0" max="100" step="1" value="50" /></label>
+            <label class="field"><span><span>Snelheid</span><output id="partySpeedOutput">100%</output></span><input id="partySpeed" type="range" min="10" max="100" step="1" value="100" /></label>
             <label class="field"><span><span>Logo’s</span><output id="partyCountOutput">18</output></span><input id="partyCount" type="range" min="4" max="48" step="1" value="18" /></label>
-            <label class="field"><span><span>Snelheid</span><output id="partySpeedOutput">65%</output></span><input id="partySpeed" type="range" min="10" max="100" step="1" value="65" /></label>
           </section>
 
           <section class="control-section appearance-section">
@@ -84,10 +85,6 @@
       </aside>
 
       <section class="workspace" aria-label="Canvas werkruimte">
-        <div class="workspace-bar">
-          <div class="canvas-meta"><span id="modeLabel">Confetti</span><span class="meta-divider"></span><span id="canvasMeta">1080 × 1920</span></div>
-          <div class="interaction-hint" id="interactionHint"><span class="mouse-icon left"></span> kracht <span class="mouse-icon right"></span> extra confetti</div>
-        </div>
         <div class="canvas-stage" id="canvasStage"><div class="canvas-frame" id="canvasFrame"><canvas id="artboard" width="1080" height="1920" aria-label="Voorvertoning"></canvas></div></div>
       </section>
     </main>

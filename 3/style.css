@@ -67,21 +67,11 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 2px s
 .export-button small { opacity: .68; font-size: 11px; }
 .export-progress { height: 3px; margin-top: 9px; overflow: hidden; background: rgba(0,0,0,.12); border-radius: 4px; }
 .export-progress span { display: block; height: 100%; width: 0; background: var(--accent); }
-.workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 48px 1fr; background: #cfcdc9; }
-.workspace-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 18px; border-bottom: 1px solid rgba(0,0,0,.14); color: rgba(0,0,0,.64); font-size: 12px; }
-.canvas-meta, .interaction-hint { display: flex; align-items: center; gap: 8px; }
-.canvas-meta span:first-child { color: var(--ink); }
-.meta-divider { width: 1px; height: 12px; background: rgba(0,0,0,.22); }
-.interaction-hint { gap: 6px; }
-.mouse-icon { position: relative; display: inline-block; width: 13px; height: 17px; border: 1px solid currentColor; border-radius: 7px; margin-left: 6px; }
-.mouse-icon::after { content: ""; position: absolute; top: 0; bottom: 7px; left: 6px; width: 1px; background: currentColor; }
-.mouse-icon.right::before, .mouse-icon.left::before { content: ""; position: absolute; top: 1px; width: 5px; height: 6px; background: rgba(0,0,0,.18); }
-.mouse-icon.right::before { right: 1px; border-radius: 0 5px 0 0; }
-.mouse-icon.left::before { left: 1px; border-radius: 5px 0 0 0; }
-.canvas-stage { min-width: 0; min-height: 0; padding: 26px; display: grid; place-items: center; overflow: hidden; background-image: radial-gradient(rgba(0,0,0,.09) .7px,transparent .7px); background-size: 14px 14px; }
-.canvas-frame { position: relative; max-width: 100%; max-height: 100%; background: white; box-shadow: 0 8px 35px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.2); overflow: hidden; }
+.workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr; background: #d3d3d3; }
+.canvas-stage { min-width: 0; min-height: 0; padding: 26px; display: grid; place-items: center; overflow: hidden; }
+.canvas-frame { position: relative; max-width: 100%; max-height: 100%; background: white; box-shadow: 0 8px 35px rgba(0,0,0,.18); overflow: hidden; }
 #artboard { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
 .toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%,14px); opacity: 0; pointer-events: none; background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: 6px; font-size: 12px; z-index: 10; transition: .2s ease; }
 .toast.is-visible { opacity: 1; transform: translate(-50%,0); }
 [hidden] { display: none !important; }
-@media (max-width: 760px) { .app-shell { grid-template-columns:1fr; grid-template-rows:minmax(360px,55vh) minmax(320px,45vh); } .panel { min-height:0; border-right:0; } .panel-scroll { overflow-y:auto; } .workspace { min-height:0; } .canvas-stage { padding:16px; } .interaction-hint { display:none; } }
+@media (max-width: 760px) { .app-shell { grid-template-columns:1fr; grid-template-rows:minmax(360px,55vh) minmax(320px,45vh); } .panel { min-height:0; border-right:0; } .panel-scroll { overflow-y:auto; } .workspace { min-height:0; } .canvas-stage { padding:16px; } }

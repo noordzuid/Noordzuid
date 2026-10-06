@@ -25,12 +25,10 @@ export const DEFAULT_STATE = {
   contentScale: 1,
   width: 1080,
   height: 1920,
-  confetti: { text: "noordzuid", size: 1.8, force: 0.6, randomStrokeColors: true },
-  polonaise: { logo: "variation", direction: "right", alternating: false, rhythm: "steady", lineCount: 3, linePositions: [0.25, 0.5, 0.75], lineOffsets: [0, 0, 0], speed: 1 },
-  party: { logo: "variation", noise: 0.58, count: 18, speed: 0.65 },
+  confetti: { text: "noordzuid", size: 2.5, force: 0.15, randomStrokeColors: true },
+  polonaise: { logo: "variation", direction: "right", alternating: false, noise: 0.0, lineCount: 3, linePositions: [0.25, 0.5, 0.75], lineOffsets: [0, 0, 0], speed: 1 },
+  party: { logo: "variation", noise: 0.58, frequency: 0.5, count: 18, speed: 1.0 },
 };
-
-export const MODE_LABELS = { confetti: "Confetti", polonaise: "Polonaise", party: "Party" };
 
 export function makeLogoOptions() {
   return [{ id: "variation", label: "Variatie" }, ...LOGOS];

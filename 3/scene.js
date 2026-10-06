@@ -1,8 +1,21 @@
 import { LOGOS, PALETTE, STROKES } from "./constants.js";
 
 const TAU = Math.PI * 2;
+const PARTY_PULSE_INTERVAL = 0.72;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const randomBetween = (min, max) => min + Math.random() * (max - min);
+const rollingEase = (value) => (1 - Math.cos(clamp(value, 0, 1) * Math.PI * 0.5)) ** 1.08;
+
+function letterGravityScale(glyph) {
+  const character = glyph.toLocaleLowerCase("nl");
+  const multipliers = {
+    i: 0.68, j: 0.74, l: 0.72,
+    f: 0.86, r: 0.88, t: 0.84,
+    m: 1.18, w: 1.22,
+    g: 1.08, q: 1.08, y: 1.06,
+  };
+  return multipliers[character] ?? 1;
+}
 
 function relativeLuminance(hex) {
   const channels = hex.replace("#", "").match(/.{2}/g).map((channel) => parseInt(channel, 16) / 255);
@@ -35,9 +48,9 @@ export class Scene {
     this.confetti = [];
     this.party = [];
     this.partyGrid = null;
-    this.polonaiseStep = 0;
-    this.polonaiseRhythmIndex = 0;
-    this.polonaiseBeatTime = 0;
+    this.partyPulseElapsed = 0;
+    this.partyPulseIndex = 0;
+    this.polonaiseLines = [];
     this.polonaiseDragIndex = null;
     this.polonaiseDragStart = null;
     this.time = 0;
@@ -68,9 +81,7 @@ export class Scene {
 
   reset() {
     this.time = 0;
-    this.polonaiseStep = 0;
-    this.polonaiseRhythmIndex = 0;
-    this.polonaiseBeatTime = 0;
+    this.polonaiseLines = [];
     this.polonaiseDragIndex = null;
     this.polonaiseDragStart = null;
     this.createConfetti();
@@ -98,6 +109,7 @@ export class Scene {
         vx: randomBetween(-width, width) * 0.035,
         vy: randomBetween(-height, height) * 0.025,
         angle: randomBetween(0, TAU), spin: randomBetween(-2.1, 2.1),
+        gravityScale: letterGravityScale(glyph),
         restitution: randomBetween(0.1, 0.2), color: this.state.foreground,
       };
     });
@@ -120,6 +132,8 @@ export class Scene {
     const originX = (width - gridWidth) * 0.5 + size * 0.5;
     const originY = (height - gridHeight) * 0.5 + size * 0.5;
     this.partyGrid = { margin, size, cols, rows, spacingX, spacingY, originX, originY };
+    this.partyPulseElapsed = 0;
+    this.partyPulseIndex = 0;
     const cells = [];
     for (let row = 0; row < rows; row += 1) for (let col = 0; col < cols; col += 1) cells.push({ col, row });
     for (let index = cells.length - 1; index > 0; index -= 1) {
@@ -132,7 +146,7 @@ export class Scene {
       return {
       col: cell.col, row: cell.row,
       fromCol: cell.col, fromRow: cell.row, toCol: cell.col, toRow: cell.row,
-      progress: 1, duration: 1, nextMoveAt: this.time + randomBetween(0, 1.2),
+      progress: 1, duration: 1, variantChanged: false, nextLogo: null,
       angle: baseAngle, startAngle: baseAngle, targetAngle: baseAngle,
       seed: randomBetween(0, 100), logo: this.pickLogo(index), size,
       };
@@ -142,16 +156,14 @@ export class Scene {
   syncConfetti() { this.createConfetti(); }
   syncParty() { this.createParty(); }
 
-  restartPolonaiseRhythm() {
-    this.polonaiseRhythmIndex = 0;
-    this.polonaiseBeatTime = 0;
-  }
+  resetPolonaiseLines() { this.polonaiseLines = []; }
 
   setPolonaiseLineCount(count) {
     const lineCount = clamp(Math.round(count), 1, 5);
     this.state.polonaise.lineCount = lineCount;
     this.state.polonaise.linePositions = Array.from({ length: lineCount }, (_, index) => (index + 1) / (lineCount + 1));
     this.state.polonaise.lineOffsets = Array.from({ length: lineCount }, () => 0);
+    this.resetPolonaiseLines();
   }
 
   polonaiseGeometry() {
@@ -160,7 +172,7 @@ export class Scene {
     const crossLength = horizontal ? height : width;
     const initialLaneGap = crossLength / 5;
     const size = Math.min(initialLaneGap * 0.82, Math.min(width, height) * 0.21) * this.state.contentScale;
-    const margin = size * 0.3;
+    const margin = size * 0.42;
     const minCenter = margin + size * 0.5;
     const maxCenter = Math.max(minCenter, crossLength - margin - size * 0.5);
     const count = this.state.polonaise.lineCount;
@@ -244,66 +256,22 @@ export class Scene {
     const force = randomBetween(0.07, 0.13) * Math.min(this.state.width, this.state.height);
     const particle = {
       type: "stroke", asset: STROKES[Math.floor(Math.random() * STROKES.length)],
-      x: x + Math.cos(direction) * base * 0.35, y: y + Math.sin(direction) * base * 0.35,
+      x, y,
       vx: Math.cos(direction) * force, vy: Math.sin(direction) * force,
       size: base, halfWidth: base * 0.23, halfHeight: base * 1.28,
       radius: Math.hypot(base * 0.23, base * 1.28),
-      collisionMargin: base * 0.22,
+      collisionMargin: base * 0.06,
+      gravityScale: 1, supportedGravityScale: 0.32,
       angle: direction, spin: randomBetween(-2.2, 2.2), restitution: 0.14,
       color: this.state.confetti.randomStrokeColors ? colors[Math.floor(Math.random() * colors.length)] : this.state.foreground,
     };
     this.prepareRigidBody(particle);
-    const placement = this.findStrokePlacement(particle, x, y, base, direction);
-    if (placement.found) {
-      particle.x = placement.x; particle.y = placement.y;
-    } else {
-      const oldestStrokeIndex = this.confetti.findIndex((item) => item.type === "stroke");
-      if (oldestStrokeIndex >= 0) {
-        const replaced = this.confetti[oldestStrokeIndex];
-        particle.x = replaced.x; particle.y = replaced.y; particle.angle = replaced.angle;
-        particle.vx = replaced.vx; particle.vy = replaced.vy; particle.spin = replaced.spin;
-        particle.asleep = replaced.asleep; particle.stableFrames = replaced.stableFrames;
-        this.confetti.splice(oldestStrokeIndex, 1);
-      } else {
-        particle.x = placement.x; particle.y = placement.y;
-      }
-    }
     this.confetti.push(particle);
     while (this.confetti.filter((item) => item.type === "stroke").length > 100) {
       const oldestStrokeIndex = this.confetti.findIndex((item) => item.type === "stroke");
       if (oldestStrokeIndex < 0) break;
       this.confetti.splice(oldestStrokeIndex, 1);
     }
-  }
-
-  findStrokePlacement(particle, x, y, base, direction) {
-    let bestPosition = { x: particle.x, y: particle.y, overlap: Infinity };
-    for (let attempt = 0; attempt < 72; attempt += 1) {
-      if (attempt < 40) {
-        const spread = base * (0.45 + attempt * 0.18);
-        const candidateAngle = direction + attempt * 2.399;
-        particle.x = x + Math.cos(candidateAngle) * spread;
-        particle.y = y + Math.sin(candidateAngle) * spread;
-      } else {
-        particle.x = randomBetween(0, this.state.width);
-        particle.y = randomBetween(0, this.state.height);
-      }
-      this.clampParticleInside(particle);
-      const overlap = this.confetti.reduce((total, other) => total + (this.rectangleCollision(particle, other)?.overlap || 0), 0);
-      if (overlap < bestPosition.overlap) bestPosition = { x: particle.x, y: particle.y, overlap };
-      if (overlap === 0) return { x: particle.x, y: particle.y, found: true };
-    }
-    return { x: bestPosition.x, y: bestPosition.y, found: false };
-  }
-
-  clampParticleInside(particle) {
-    const halfWidth = particle.halfWidth + (particle.collisionMargin || 0);
-    const halfHeight = particle.halfHeight + (particle.collisionMargin || 0);
-    const cos = Math.cos(particle.angle); const sin = Math.sin(particle.angle);
-    const extentX = Math.abs(cos) * halfWidth + Math.abs(sin) * halfHeight;
-    const extentY = Math.abs(sin) * halfWidth + Math.abs(cos) * halfHeight;
-    particle.x = clamp(particle.x, extentX, Math.max(extentX, this.state.width - extentX));
-    particle.y = clamp(particle.y, extentY, Math.max(extentY, this.state.height - extentY));
   }
 
   applyForce(x, y, strength = 1) {
@@ -348,8 +316,12 @@ export class Scene {
     const sleepSpeed = Math.min(width, height) * 0.018;
     for (const particle of this.confetti) {
       particle.hadContact = false;
+      particle.supported = false;
       if (particle.asleep) continue;
-      particle.vy += gravity * dt;
+      const gravityScale = particle.wasSupported
+        ? (particle.supportedGravityScale ?? particle.gravityScale ?? 1)
+        : (particle.gravityScale ?? 1);
+      particle.vy += gravity * gravityScale * dt;
       particle.vx *= Math.pow(0.998, dt * 60);
       particle.vy *= Math.pow(0.998, dt * 60);
       particle.spin *= Math.pow(0.996, dt * 60);
@@ -358,20 +330,27 @@ export class Scene {
       particle.angle += particle.spin * dt;
       this.constrainParticle(particle, width, height);
     }
-    for (let pass = 0; pass < 4; pass += 1) {
+    // A deeper pile needs more passes to carry pressure through every layer.
+    // Scaling the solver avoids bottom-layer compression without making the
+    // small, common confetti setup needlessly expensive.
+    const solverPasses = Math.min(22, 8 + Math.floor(this.confetti.length / 7));
+    for (let pass = 0; pass < solverPasses; pass += 1) {
       this.resolveCollisions();
       for (const particle of this.confetti) this.constrainParticle(particle, width, height);
     }
     for (const particle of this.confetti) {
+      particle.wasSupported = particle.supported;
       if (particle.asleep) continue;
       const linearSpeed = Math.hypot(particle.vx, particle.vy);
       const edgeSpeed = Math.abs(particle.spin) * particle.radius;
       if (particle.hadContact && linearSpeed < sleepSpeed * 4 && edgeSpeed < sleepSpeed * 4) {
-        particle.vx *= 0.9; particle.vy *= 0.9; particle.spin *= 0.82;
+        const contactDamping = particle.type === "stroke" ? 0.8 : 0.86;
+        const spinDamping = particle.type === "stroke" ? 0.64 : 0.74;
+        particle.vx *= contactDamping; particle.vy *= contactDamping; particle.spin *= spinDamping;
       }
       if (particle.hadContact && linearSpeed < sleepSpeed && edgeSpeed < sleepSpeed) particle.stableFrames += 1;
       else particle.stableFrames = 0;
-      if (particle.stableFrames > 16) {
+      if (particle.stableFrames > 12) {
         particle.vx = 0; particle.vy = 0; particle.spin = 0;
         particle.asleep = true;
       }
@@ -419,6 +398,7 @@ export class Scene {
 
   resolveBoundaryContact(particle, nx, ny, penetration) {
     particle.hadContact = true;
+    if (ny < -0.35) particle.supported = true;
     particle.x += nx * penetration;
     particle.y += ny * penetration;
     const contact = this.supportPoint(particle, -nx, -ny);
@@ -467,12 +447,22 @@ export class Scene {
         const collision = this.rectangleCollision(a, b);
         if (!collision) continue;
         a.hadContact = true; b.hadContact = true;
-        if (a.asleep && b.asleep) continue;
         const { nx, ny, overlap } = collision;
+        if (ny > 0.35) a.supported = true;
+        if (ny < -0.35) b.supported = true;
+        if (a.asleep && b.asleep) continue;
+
+        // Treat sleeping bodies as fixed supports during positional correction.
+        // That prevents a settled pile from being nudged back and forth by the
+        // small overlap corrections of newly arriving confetti.
+        const correctionInvMassA = a.asleep ? 0 : a.invMass;
+        const correctionInvMassB = b.asleep ? 0 : b.invMass;
+        const correctionInvMassSum = correctionInvMassA + correctionInvMassB;
+        const correction = Math.max(overlap - 0.08, 0) * 0.9 / Math.max(correctionInvMassSum, 0.0001);
+        a.x -= nx * correction * correctionInvMassA; a.y -= ny * correction * correctionInvMassA;
+        b.x += nx * correction * correctionInvMassB; b.y += ny * correction * correctionInvMassB;
+
         const invMassSum = a.invMass + b.invMass;
-        const correction = Math.max(overlap - 0.35, 0) * 0.58 / Math.max(invMassSum, 0.0001);
-        a.x -= nx * correction * a.invMass; a.y -= ny * correction * a.invMass;
-        b.x += nx * correction * b.invMass; b.y += ny * correction * b.invMass;
 
         const pointA = this.supportPoint(a, nx, ny);
         const pointB = this.supportPoint(b, -nx, -ny);
@@ -549,33 +539,40 @@ export class Scene {
     }
   }
 
-  rhythmPattern(type) {
-    if (type === "cucaracha") return [
-      { duration: 0.62, motion: 0.72 }, { duration: 0.62, motion: 0.72 }, { duration: 1.18, motion: 0.78 },
-      { duration: 0.62, motion: 0.72 }, { duration: 0.62, motion: 0.72 }, { duration: 1.55, motion: 0.76 },
-    ];
-    if (type === "polonaise") return [{ duration: 1.12, motion: 0.76 }, { duration: 0.72, motion: 0.7 }, { duration: 0.72, motion: 0.7 }];
-    if (type === "waltz") return [{ duration: 1.22, motion: 0.76 }, { duration: 0.82, motion: 0.7 }, { duration: 0.82, motion: 0.7 }];
-    return [{ duration: 1, motion: 0.76 }];
-  }
-
-  advancePolonaise(dt, settings) {
-    const pattern = this.rhythmPattern(settings.rhythm);
+  advancePolonaise(dt, settings, lineIndex) {
     const baseDuration = 0.48 / Math.max(settings.speed, 0.1);
-    this.polonaiseBeatTime += dt;
-    let beat = pattern[this.polonaiseRhythmIndex % pattern.length];
+    if (!this.polonaiseLines[lineIndex]) {
+      this.polonaiseLines[lineIndex] = { step: 0, rhythmIndex: 0, beatTime: 0 };
+    }
+    const runtime = this.polonaiseLines[lineIndex];
+    runtime.beatTime += dt;
+    let beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
     let duration = baseDuration * beat.duration;
-    while (this.polonaiseBeatTime >= duration) {
-      this.polonaiseBeatTime -= duration;
-      this.polonaiseStep += 1;
-      this.polonaiseRhythmIndex += 1;
-      beat = pattern[this.polonaiseRhythmIndex % pattern.length];
+    while (runtime.beatTime >= duration) {
+      runtime.beatTime -= duration;
+      runtime.step += 1;
+      runtime.rhythmIndex += 1;
+      beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
       duration = baseDuration * beat.duration;
     }
-    const timeline = this.polonaiseBeatTime / Math.max(duration, 0.001);
+    const timeline = runtime.beatTime / Math.max(duration, 0.001);
     const activePhase = clamp(timeline / beat.motion, 0, 1);
-    const eased = 1 - Math.cos(activePhase * Math.PI * 0.5);
-    return { step: this.polonaiseStep, phase: eased };
+    const eased = rollingEase(activePhase);
+    return { step: runtime.step, phase: eased };
+  }
+
+  polonaiseBeat(index, intensity = 0, lineIndex = 0) {
+    // Two incommensurate waves make a calm, repeatable quasi-random rhythm.
+    // Every line gets its own phase, breaking the rows into one long procession.
+    const linePhase = lineIndex * 1.731;
+    const first = Math.sin(index * 0.83 + linePhase + 0.6);
+    const second = Math.sin(index * 0.37 + linePhase * 0.61 + 2.1) * 0.5;
+    const rhythmNoise = (first + second) / 1.5;
+    const amount = clamp(intensity, 0, 1);
+    return {
+      duration: 1 + rhythmNoise * 0.14 * amount,
+      motion: 0.76 - Math.abs(rhythmNoise) * 0.05 * amount,
+    };
   }
 
   tumbleStep(start, floor, size, horizontal, sign, step, phase) {
@@ -605,9 +602,9 @@ export class Scene {
     const { horizontal, size, margin, centers } = geometry;
     const travelLength = horizontal ? width : height;
     const spacing = size + margin;
-    const beat = this.advancePolonaise(dt, settings);
 
     centers.forEach((center, lineIndex) => {
+      const beat = this.advancePolonaise(dt, settings, lineIndex);
       let sign = settings.direction === "right" || settings.direction === "down" ? 1 : -1;
       if (settings.alternating && lineIndex % 2) sign *= -1;
       const completedOffset = sign * beat.step * size + settings.lineOffsets[lineIndex];
@@ -626,23 +623,41 @@ export class Scene {
     });
   }
 
-  noiseAngle(x, y, time, density, seed) {
-    const scale = 0.5 + density * 2.5;
-    return (Math.sin(x * scale + time * 0.32 + seed) + Math.cos(y * scale * 1.3 - time * 0.27 + seed * 0.7)) * Math.PI;
-  }
-
   partyCellPosition(col, row) {
     const grid = this.partyGrid;
     return { x: grid.originX + col * grid.spacingX, y: grid.originY + row * grid.spacingY };
   }
 
-  choosePartyMove(item, occupied, reserved) {
+  partyFieldValue(col, row, time, channel = 0) {
+    const spatialScale = 1.08;
+    const timeScale = 0.46;
+    const first = Math.sin((col * 0.73 + row * 0.31) * spatialScale + time * timeScale + channel * 2.17);
+    const second = Math.cos((row * 0.67 - col * 0.21) * spatialScale - time * timeScale * 0.63 + channel * 1.31);
+    return clamp(0.5 + (first + second) * 0.25, 0, 1);
+  }
+
+  partyMotion(item, settings) {
+    const influence = clamp(settings.noise, 0, 1);
+    const speedNoise = (this.partyFieldValue(item.col, item.row, this.time) - 0.5) * 2;
+    const frequencyNoise = (this.partyFieldValue(item.col, item.row, this.time, 1) - 0.5) * 2;
+    const localSpeed = clamp(settings.speed + speedNoise * influence, 0.05, 1);
+    const localFrequency = clamp(settings.frequency + frequencyNoise * influence, 0, 1);
+    return { duration: 0.42 / (0.25 + localSpeed * 0.75), frequency: localFrequency };
+  }
+
+  partyRollChance(item, channel = 0) {
+    const value = Math.sin(item.seed * 12.9898 + this.partyPulseIndex * 78.233 + channel * 37.719) * 43758.5453;
+    return value - Math.floor(value);
+  }
+
+  choosePartyMove(item, occupied, reserved, duration, variationChance) {
     const directions = [{ dc: 1, dr: 0 }, { dc: -1, dr: 0 }, { dc: 0, dr: 1 }, { dc: 0, dr: -1 }];
-    const noise = this.noiseAngle(item.col, item.row, this.time, this.state.party.noise, item.seed);
+    const directionNoise = this.partyFieldValue(item.col, item.row, this.time, 2);
+    const targetAngle = directionNoise * TAU;
     directions.sort((a, b) => {
       const angleA = Math.atan2(a.dr, a.dc); const angleB = Math.atan2(b.dr, b.dc);
-      const deltaA = Math.abs(Math.atan2(Math.sin(angleA - noise), Math.cos(angleA - noise)));
-      const deltaB = Math.abs(Math.atan2(Math.sin(angleB - noise), Math.cos(angleB - noise)));
+      const deltaA = Math.abs(Math.atan2(Math.sin(angleA - targetAngle), Math.cos(angleA - targetAngle)));
+      const deltaB = Math.abs(Math.atan2(Math.sin(angleB - targetAngle), Math.cos(angleB - targetAngle)));
       return deltaA - deltaB;
     });
     const destination = directions.map(({ dc, dr }) => ({ col: item.col + dc, row: item.row + dr, dc, dr })).find((cell) => {
@@ -650,34 +665,72 @@ export class Scene {
       const key = `${cell.col},${cell.row}`;
       return !occupied.has(key) && !reserved.has(key);
     });
-    if (!destination) { item.nextMoveAt = this.time + 0.25; return; }
+    if (!destination) return false;
     item.fromCol = item.col; item.fromRow = item.row;
     item.toCol = destination.col; item.toRow = destination.row;
     item.progress = 0;
-    item.duration = 1.18 - this.state.party.speed * 0.82;
+    item.duration = Math.max(0.08, duration);
+    item.variantChanged = false;
+    item.nextLogo = null;
     item.startAngle = item.angle;
     const turn = destination.dc !== 0 ? destination.dc : -destination.dr;
     item.targetAngle = item.angle + turn * Math.PI * 0.5;
+    if (this.state.party.logo === "variation" && this.partyRollChance(item, 1) < variationChance) {
+      const variation = this.partyFieldValue(destination.col, destination.row, this.time, 3);
+      let nextLogo = this.pickLogo(Math.floor(variation * LOGOS.length), "variation");
+      if (nextLogo === item.logo && LOGOS.length > 1) {
+        const currentIndex = LOGOS.indexOf(item.logo);
+        nextLogo = LOGOS[(currentIndex + 1) % LOGOS.length];
+      }
+      item.nextLogo = nextLogo;
+    }
     reserved.add(`${destination.col},${destination.row}`);
+    return true;
   }
 
   renderParty(dt) {
     const settings = this.state.party;
-    const occupied = new Set(this.party.map((item) => `${item.col},${item.row}`));
-    const reserved = new Set(this.party.filter((item) => item.progress < 1).map((item) => `${item.toCol},${item.toRow}`));
+    const speedScale = 0.25 + clamp(settings.speed, 0, 1) * 0.75;
+    const pulseInterval = PARTY_PULSE_INTERVAL / speedScale;
+    this.partyPulseElapsed += dt;
+    let pulse = false;
+    while (this.partyPulseElapsed >= pulseInterval) {
+      this.partyPulseElapsed -= pulseInterval;
+      this.partyPulseIndex += 1;
+      pulse = true;
+    }
+
     for (const item of this.party) {
-      if (item.progress >= 1 && this.time >= item.nextMoveAt) this.choosePartyMove(item, occupied, reserved);
       if (item.progress < 1) {
         item.progress = Math.min(1, item.progress + dt / item.duration);
+        if (!item.variantChanged && item.nextLogo && rollingEase(item.progress) >= 0.5) {
+          item.logo = item.nextLogo;
+          item.variantChanged = true;
+        }
         if (item.progress >= 1) {
           item.col = item.toCol; item.row = item.toRow; item.angle = item.targetAngle;
-          item.nextMoveAt = this.time + 0.08 + (1 - settings.noise) * 0.34;
           item.seed += 0.73;
+          item.nextLogo = null;
         }
       }
+    }
+
+    if (pulse) {
+      const occupied = new Set(this.party.map((item) => `${item.col},${item.row}`));
+      const reserved = new Set(this.party.filter((item) => item.progress < 1).map((item) => `${item.toCol},${item.toRow}`));
+      for (const item of this.party) {
+        if (item.progress < 1) continue;
+        const motion = this.partyMotion(item, settings);
+        if (this.partyRollChance(item) < motion.frequency) {
+          this.choosePartyMove(item, occupied, reserved, motion.duration, motion.frequency);
+        }
+      }
+    }
+
+    for (const item of this.party) {
       const start = this.partyCellPosition(item.fromCol, item.fromRow);
       const end = this.partyCellPosition(item.toCol, item.toRow);
-      const phase = item.progress >= 1 ? 1 : (0.5 - Math.cos(item.progress * Math.PI) * 0.5);
+      const phase = item.progress >= 1 ? 1 : rollingEase(item.progress);
       const x = start.x + (end.x - start.x) * phase;
       const y = start.y + (end.y - start.y) * phase;
       const angle = item.startAngle + (item.targetAngle - item.startAngle) * phase;

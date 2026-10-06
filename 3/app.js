@@ -1,4 +1,4 @@
-import { DEFAULT_STATE, MODE_LABELS, PALETTE, makeLogoOptions } from "./constants.js";
+import { DEFAULT_STATE, PALETTE, makeLogoOptions } from "./constants.js";
 import { Scene } from "./scene.js";
 import { exportMp4, exportPng } from "./exporter.js";
 
@@ -81,7 +81,6 @@ function updateDimensions() {
   const height = Math.max(100, Math.min(4096, Number($("#canvasHeight").value) || 1920));
   state.width = Math.round(width); state.height = Math.round(height);
   $("#canvasWidth").value = state.width; $("#canvasHeight").value = state.height;
-  $("#canvasMeta").textContent = `${state.width} × ${state.height}`;
   $("#exportButton small").textContent = `${state.width} × ${state.height}`;
   scene.resize(state.width, state.height);
   updateFrameSize();
@@ -98,8 +97,6 @@ function setMode(mode) {
   state.mode = mode;
   $$(".mode-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
   $$(".mode-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== mode; });
-  $("#modeLabel").textContent = MODE_LABELS[mode];
-  $("#interactionHint").hidden = mode !== "confetti";
   canvas.style.cursor = mode === "confetti" ? "crosshair" : mode === "polonaise" ? "grab" : "default";
   scene.modeChanged();
 }
@@ -151,10 +148,11 @@ function syncControlsFromState() {
   $("#polonaiseLogo").value = state.polonaise.logo; $("#partyLogo").value = state.party.logo;
   $$("#directionGrid button").forEach((button) => button.classList.toggle("is-active", button.dataset.direction === state.polonaise.direction));
   $$("#alternatingControl button").forEach((button) => button.classList.toggle("is-active", (button.dataset.alternating === "true") === state.polonaise.alternating));
-  $("#rhythm").value = state.polonaise.rhythm;
+  $("#polonaiseNoise").value = Math.round(state.polonaise.noise * 100); $("#polonaiseNoiseOutput").value = `${Math.round(state.polonaise.noise * 100)}%`;
   $("#polonaiseSpeed").value = Math.round(state.polonaise.speed * 100); $("#polonaiseSpeedOutput").value = `${Math.round(state.polonaise.speed * 100)}%`;
   $("#polonaiseLineCount").value = state.polonaise.lineCount; $("#polonaiseLineCountOutput").value = state.polonaise.lineCount;
   $("#noise").value = Math.round(state.party.noise * 100); $("#noiseOutput").value = `${Math.round(state.party.noise * 100)}%`;
+  $("#partyFrequency").value = Math.round(state.party.frequency * 100); $("#partyFrequencyOutput").value = `${Math.round(state.party.frequency * 100)}%`;
   $("#partyCount").value = state.party.count; $("#partyCountOutput").value = state.party.count;
   $("#partySpeed").value = Math.round(state.party.speed * 100); $("#partySpeedOutput").value = `${Math.round(state.party.speed * 100)}%`;
   $("#contentScale").value = Math.round(state.contentScale * 100); $("#contentScaleOutput").value = `${Math.round(state.contentScale * 100)}%`;
@@ -195,9 +193,10 @@ function bindControls() {
     state.polonaise.alternating = button.dataset.alternating === "true";
     $$("#alternatingControl button").forEach((item) => item.classList.toggle("is-active", item === button));
   }));
-  $("#rhythm").addEventListener("change", (event) => {
-    state.polonaise.rhythm = event.target.value;
-    scene.restartPolonaiseRhythm();
+  $("#polonaiseNoise").addEventListener("input", (event) => {
+    state.polonaise.noise = Number(event.target.value) / 100;
+    $("#polonaiseNoiseOutput").value = `${event.target.value}%`;
+    scene.resetPolonaiseLines();
   });
   $("#polonaiseSpeed").addEventListener("input", (event) => { state.polonaise.speed = Number(event.target.value) / 100; $("#polonaiseSpeedOutput").value = `${event.target.value}%`; });
   $("#polonaiseLineCount").addEventListener("input", (event) => {
@@ -206,6 +205,7 @@ function bindControls() {
     scene.setPolonaiseLineCount(count);
   });
   $("#noise").addEventListener("input", (event) => { state.party.noise = Number(event.target.value) / 100; $("#noiseOutput").value = `${event.target.value}%`; });
+  $("#partyFrequency").addEventListener("input", (event) => { state.party.frequency = Number(event.target.value) / 100; $("#partyFrequencyOutput").value = `${event.target.value}%`; });
   $("#partyCount").addEventListener("input", (event) => { state.party.count = Number(event.target.value); $("#partyCountOutput").value = event.target.value; scene.syncParty(); });
   $("#partySpeed").addEventListener("input", (event) => { state.party.speed = Number(event.target.value) / 100; $("#partySpeedOutput").value = `${event.target.value}%`; });
 
