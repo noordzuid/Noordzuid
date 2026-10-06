@@ -6,7 +6,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const cloneState = () => ({
   ...DEFAULT_STATE,
-  excludedColors: new Set(),
+  excludedColors: new Set(DEFAULT_STATE.excludedColors),
   confetti: { ...DEFAULT_STATE.confetti },
   polonaise: { ...DEFAULT_STATE.polonaise, linePositions: [...DEFAULT_STATE.polonaise.linePositions], lineOffsets: [...DEFAULT_STATE.polonaise.lineOffsets] },
   party: { ...DEFAULT_STATE.party },
@@ -114,10 +114,12 @@ function renderPalette(target, selector) {
     swatch.type = "button";
     swatch.className = "swatch";
     swatch.style.background = color;
-    swatch.title = color;
-    swatch.setAttribute("aria-label", `Kleur ${color}`);
+    const isExcluded = state.excludedColors.has(color) || color === state.foreground;
+    const exclusionLabel = isExcluded ? ", uitgesloten voor extra confetti" : "";
+    swatch.title = `${color}${isExcluded ? " · niet in extra confetti" : ""}`;
+    swatch.setAttribute("aria-label", `Kleur ${color}${exclusionLabel}`);
     swatch.classList.toggle("is-selected", color === state[target]);
-    swatch.classList.toggle("is-excluded", state.excludedColors.has(color));
+    swatch.classList.toggle("is-excluded", isExcluded);
     swatch.addEventListener("click", () => {
       state[target] = color;
       scene.tintCache.clear();

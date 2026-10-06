@@ -17,18 +17,6 @@ function letterGravityScale(glyph) {
   return multipliers[character] ?? 1;
 }
 
-function relativeLuminance(hex) {
-  const channels = hex.replace("#", "").match(/.{2}/g).map((channel) => parseInt(channel, 16) / 255);
-  const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
-  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
-}
-
-function contrastRatio(first, second) {
-  const light = Math.max(relativeLuminance(first), relativeLuminance(second));
-  const dark = Math.min(relativeLuminance(first), relativeLuminance(second));
-  return (light + 0.05) / (dark + 0.05);
-}
-
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -216,14 +204,10 @@ export class Scene {
   }
 
   allowedColors() {
-    const background = this.state.background.toUpperCase();
-    const manuallyAllowed = PALETTE.filter((color) => !this.state.excludedColors.has(color));
-    const visible = manuallyAllowed.filter((color) => color.toUpperCase() !== background && contrastRatio(color, background) >= 3);
-    if (visible.length) return visible;
-    const fallback = manuallyAllowed
-      .filter((color) => color.toUpperCase() !== background)
-      .sort((first, second) => contrastRatio(second, background) - contrastRatio(first, background))[0];
-    return [fallback || this.state.foreground];
+    const excluded = new Set(this.state.excludedColors);
+    excluded.add(this.state.foreground);
+    const allowed = PALETTE.filter((color) => !excluded.has(color));
+    return allowed.length ? allowed : [this.state.foreground];
   }
 
   recolorStrokes() {
@@ -247,6 +231,7 @@ export class Scene {
     particle.stableFrames = 0;
     particle.asleep = false;
     particle.hadContact = false;
+    particle.boundaryContact = false;
   }
 
   addStroke(x, y) {
@@ -285,12 +270,33 @@ export class Scene {
       if (surfaceDistance > range) continue;
       const falloff = 0.2 + (1 - surfaceDistance / range) * 0.8;
       const impulse = falloff * range * 6.2 * strength * forceScale;
+      let impulseX = (dx / distance) * impulse;
+      let impulseY = (dy / distance) * impulse;
+      const wallBuffer = particle.radius * 0.35;
+      const atLeftWall = particle.x - particle.radius <= wallBuffer;
+      const atRightWall = this.state.width - particle.x - particle.radius <= wallBuffer;
+      const atTopWall = particle.y - particle.radius <= wallBuffer;
+      const atBottomWall = this.state.height - particle.y - particle.radius <= wallBuffer;
+      if ((atLeftWall && impulseX < 0) || (atRightWall && impulseX > 0)) impulseX *= 0.08;
+      if ((atTopWall && impulseY < 0) || (atBottomWall && impulseY > 0)) impulseY *= 0.08;
       particle.asleep = false;
       particle.stableFrames = 0;
-      particle.vx += (dx / distance) * impulse;
-      particle.vy += (dy / distance) * impulse;
+      particle.vx += impulseX;
+      particle.vy += impulseY;
       particle.spin += randomBetween(-3.6, 3.6) * strength * forceScale;
+      this.limitParticleSpeed(particle);
     }
+  }
+
+  limitParticleSpeed(particle) {
+    const maxSpeed = Math.hypot(this.state.width, this.state.height) * 2.4;
+    const speed = Math.hypot(particle.vx, particle.vy);
+    if (speed > maxSpeed) {
+      const scale = maxSpeed / speed;
+      particle.vx *= scale;
+      particle.vy *= scale;
+    }
+    particle.spin = clamp(particle.spin, -9, 9);
   }
 
   loop(now) {
@@ -316,6 +322,7 @@ export class Scene {
     const sleepSpeed = Math.min(width, height) * 0.018;
     for (const particle of this.confetti) {
       particle.hadContact = false;
+      particle.boundaryContact = false;
       particle.supported = false;
       if (particle.asleep) continue;
       const gravityScale = particle.wasSupported
@@ -341,6 +348,14 @@ export class Scene {
     for (const particle of this.confetti) {
       particle.wasSupported = particle.supported;
       if (particle.asleep) continue;
+      if (particle.boundaryContact) {
+        // A wall should absorb energy instead of feeding it back into a body
+        // that is being pushed into a corner or a dense pile.
+        particle.vx *= 0.72;
+        particle.vy *= 0.72;
+        particle.spin *= 0.48;
+      }
+      this.limitParticleSpeed(particle);
       const linearSpeed = Math.hypot(particle.vx, particle.vy);
       const edgeSpeed = Math.abs(particle.spin) * particle.radius;
       if (particle.hadContact && linearSpeed < sleepSpeed * 4 && edgeSpeed < sleepSpeed * 4) {
@@ -398,6 +413,7 @@ export class Scene {
 
   resolveBoundaryContact(particle, nx, ny, penetration) {
     particle.hadContact = true;
+    particle.boundaryContact = true;
     if (ny < -0.35) particle.supported = true;
     particle.x += nx * penetration;
     particle.y += ny * penetration;
@@ -405,7 +421,10 @@ export class Scene {
     const rx = contact.x - particle.x; const ry = contact.y - particle.y;
     const velocity = this.contactVelocity(particle, rx, ry);
     const normalSpeed = velocity.x * nx + velocity.y * ny;
-    if (normalSpeed >= 0) return;
+    if (normalSpeed >= 0) {
+      particle.spin *= 0.86;
+      return;
+    }
     const crossNormal = rx * ny - ry * nx;
     const denominator = particle.invMass + crossNormal * crossNormal * particle.invInertia;
     const restingThreshold = Math.min(this.state.width, this.state.height) * 0.04;
@@ -419,6 +438,7 @@ export class Scene {
     const tangentDenominator = particle.invMass + crossTangent * crossTangent * particle.invInertia;
     const frictionImpulse = clamp(-tangentSpeed / Math.max(tangentDenominator, 0.0001), -normalImpulse * 0.62, normalImpulse * 0.62);
     this.applyBodyImpulse(particle, tx * frictionImpulse, ty * frictionImpulse, rx, ry);
+    particle.spin *= 0.82;
   }
 
   resolveCollisions() {

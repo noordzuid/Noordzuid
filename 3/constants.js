@@ -3,6 +3,8 @@ export const PALETTE = [
   "#8BCAFF", "#D4F2AA", "#053530", "#FFFFFF",
 ];
 
+export const DEFAULT_EXCLUDED_COLORS = ["#000000", "#353214", "#053530"];
+
 export const LOGOS = [
   { id: "normaal", label: "Normaal", src: "assets/logos/logo-normaal.svg" },
   { id: "rondjes", label: "Rondjes", src: "assets/logos/logo-rondjes.svg" },
@@ -21,7 +23,7 @@ export const DEFAULT_STATE = {
   mode: "confetti",
   foreground: PALETTE[1],
   background: PALETTE[0],
-  excludedColors: new Set(),
+  excludedColors: new Set(DEFAULT_EXCLUDED_COLORS),
   contentScale: 1,
   width: 1080,
   height: 1920,
