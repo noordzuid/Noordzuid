@@ -49,7 +49,6 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
 .swatch { aspect-ratio: 1; border: 1px solid rgba(0,0,0,.16); border-radius: 4px; cursor: pointer; position: relative; padding: 0; }
 .swatch.is-selected { outline: 2px solid var(--ink); outline-offset: 2px; }
 .swatch.is-excluded::after { content: "x"; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #fff; font: 400 13px/1 Arial, sans-serif; pointer-events: none; }
-.scale-field { margin-top: 18px; }
 .size-row { display: grid; grid-template-columns: minmax(0,1fr) 32px minmax(0,1fr); gap: 6px; align-items: end; }
 .size-row .field { margin-bottom: 14px; }
 .size-swap { margin-bottom: 14px; }

@@ -5,6 +5,7 @@ import { exportMp4, exportPng } from "./exporter.js";
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const COLOR_MODES = ["confetti", "polonaise", "party"];
+const createModeScales = () => Object.fromEntries(COLOR_MODES.map((mode) => [mode, DEFAULT_STATE.contentScale]));
 const createModeColorSettings = () => Object.fromEntries(COLOR_MODES.map((mode) => [mode, {
   foreground: DEFAULT_STATE.foreground,
   background: DEFAULT_STATE.background,
@@ -13,6 +14,7 @@ const createModeColorSettings = () => Object.fromEntries(COLOR_MODES.map((mode) 
 }]));
 const cloneState = () => {
   const colorSettings = createModeColorSettings();
+  const contentScales = createModeScales();
   const activeColors = colorSettings[DEFAULT_STATE.mode];
   return {
     ...DEFAULT_STATE,
@@ -21,6 +23,7 @@ const cloneState = () => {
     varyColors: activeColors.varyColors,
     excludedColors: activeColors.excludedColors,
     colorSettings,
+    contentScales,
     confetti: { ...DEFAULT_STATE.confetti },
     polonaise: { ...DEFAULT_STATE.polonaise, linePositions: [...DEFAULT_STATE.polonaise.linePositions], lineOffsets: [...DEFAULT_STATE.polonaise.lineOffsets] },
     party: { ...DEFAULT_STATE.party },
@@ -36,24 +39,26 @@ let extraConfettiRepeatTimer;
 let extraConfettiPointerPosition = null;
 const history = [];
 
-function saveActiveColorSettings() {
+function saveActiveModeSettings() {
   const colors = state.colorSettings[state.mode];
   colors.foreground = state.foreground;
   colors.background = state.background;
   colors.varyColors = state.varyColors;
   colors.excludedColors = state.excludedColors;
+  state.contentScales[state.mode] = state.contentScale;
 }
 
-function loadModeColorSettings(mode) {
+function loadModeSettings(mode) {
   const colors = state.colorSettings[mode];
   state.foreground = colors.foreground;
   state.background = colors.background;
   state.varyColors = colors.varyColors;
   state.excludedColors = colors.excludedColors;
+  state.contentScale = state.contentScales[mode];
 }
 
 function serializeColorSettings() {
-  saveActiveColorSettings();
+  saveActiveModeSettings();
   return Object.fromEntries(COLOR_MODES.map((mode) => {
     const colors = state.colorSettings[mode];
     return [mode, { ...colors, excludedColors: [...colors.excludedColors] }];
@@ -70,7 +75,7 @@ function restoreColorSettings(snapshot) {
 
 function snapshotState() {
   return {
-    mode: state.mode, colorSettings: serializeColorSettings(), contentScale: state.contentScale,
+    mode: state.mode, colorSettings: serializeColorSettings(), contentScales: { ...state.contentScales },
     width: state.width, height: state.height,
     confetti: { ...state.confetti },
     polonaise: { ...state.polonaise, linePositions: [...state.polonaise.linePositions], lineOffsets: [...state.polonaise.lineOffsets] },
@@ -89,8 +94,8 @@ function pushHistory() {
 function restoreSnapshot(snapshot) {
   state.mode = snapshot.mode;
   state.colorSettings = restoreColorSettings(snapshot.colorSettings);
-  loadModeColorSettings(state.mode);
-  state.contentScale = snapshot.contentScale;
+  state.contentScales = { ...createModeScales(), ...snapshot.contentScales };
+  loadModeSettings(state.mode);
   state.width = snapshot.width; state.height = snapshot.height;
   Object.assign(state.confetti, snapshot.confetti);
   Object.assign(state.polonaise, snapshot.polonaise, { linePositions: [...snapshot.polonaise.linePositions], lineOffsets: [...snapshot.polonaise.lineOffsets] });
@@ -141,9 +146,9 @@ function updateRange(range) {
 }
 
 function setMode(mode) {
-  saveActiveColorSettings();
+  saveActiveModeSettings();
   state.mode = mode;
-  loadModeColorSettings(mode);
+  loadModeSettings(mode);
   $$(".mode-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
   $$(".mode-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== mode; });
   canvas.style.cursor = mode === "confetti" ? "crosshair" : mode === "polonaise" ? "grab" : "default";
@@ -231,7 +236,11 @@ function syncControlsFromState() {
   $("#noise").value = Math.round(state.party.noise * 100); $("#noiseOutput").value = `${Math.round(state.party.noise * 100)}%`;
   $("#partyCount").value = state.party.count; $("#partyCountOutput").value = state.party.count;
   $("#partySpeed").value = Math.round(state.party.speed * 100); $("#partySpeedOutput").value = `${Math.round(state.party.speed * 100)}%`;
-  $("#contentScale").value = Math.round(state.contentScale * 100); $("#contentScaleOutput").value = `${Math.round(state.contentScale * 100)}%`;
+  $$(".content-scale").forEach((input) => {
+    const value = Math.round(state.contentScales[input.dataset.mode] * 100);
+    input.value = value;
+    input.closest(".field").querySelector(".content-scale-output").value = `${value}%`;
+  });
   $("#canvasWidth").value = state.width; $("#canvasHeight").value = state.height;
   $$("input[type='range']").forEach(updateRange);
   updateColorControls(); setMode(state.mode); updateDimensions();
@@ -283,11 +292,15 @@ function bindControls() {
   $("#partyCount").addEventListener("input", (event) => { state.party.count = Number(event.target.value); $("#partyCountOutput").value = event.target.value; scene.syncParty(); });
   $("#partySpeed").addEventListener("input", (event) => { state.party.speed = Number(event.target.value) / 100; $("#partySpeedOutput").value = `${event.target.value}%`; });
 
-  $("#contentScale").addEventListener("input", (event) => {
-    state.contentScale = Number(event.target.value) / 100; $("#contentScaleOutput").value = `${event.target.value}%`;
-    if (state.mode === "confetti") scene.syncConfetti();
-    if (state.mode === "party") scene.syncParty();
-  });
+  $$(".content-scale").forEach((input) => input.addEventListener("input", (event) => {
+    const mode = event.target.dataset.mode;
+    const scale = Number(event.target.value) / 100;
+    state.contentScales[mode] = scale;
+    if (state.mode === mode) state.contentScale = scale;
+    event.target.closest(".field").querySelector(".content-scale-output").value = `${event.target.value}%`;
+    if (mode === "confetti") scene.syncConfetti();
+    if (mode === "party") scene.syncParty();
+  }));
 
   [$("#canvasWidth"), $("#canvasHeight")].forEach((input) => {
     input.addEventListener("change", updateDimensions);
@@ -379,7 +392,7 @@ async function handleExport() {
 }
 
 async function start() {
-  bindControls(); updateColorControls(); updateExportControls(); updateFrameSize();
+  bindControls(); syncControlsFromState(); updateExportControls();
   new ResizeObserver(updateFrameSize).observe($("#canvasStage"));
   try { await scene.init(); } catch (error) { toast("Niet alle merkassets konden worden geladen."); console.error(error); }
 }

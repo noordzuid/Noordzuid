@@ -21,9 +21,9 @@
         <div class="panel-scroll">
           <section class="control-section mode-panel" data-panel="confetti">
             <div class="section-heading"><h2>Confetti</h2></div>
-            <label class="field field-text"><span>Tekst</span><textarea id="confettiText" rows="2" maxlength="56" spellcheck="false">noordzuid</textarea></label>
-            <label class="field"><span><span>Grootte</span><output id="confettiSizeOutput">0%</output></span><input id="confettiSize" type="range" min="0" max="100" step="1" value="0" /></label>
+            <label class="field field-text"><span>Tekst</span><textarea id="confettiText" rows="2" maxlength="100" spellcheck="false">noordzuid</textarea></label>
             <label class="field"><span><span>Kracht</span><output id="forceOutput">60%</output></span><input id="force" type="range" min="0" max="100" step="1" value="60" /></label>
+            <label class="field"><span><span>Schaal</span><output id="confettiSizeOutput">0%</output></span><input id="confettiSize" type="range" min="0" max="150" step="1" value="0" /></label>
           </section>
 
           <section class="control-section mode-panel" data-panel="polonaise" hidden>
@@ -37,10 +37,11 @@
             </div>
             <div class="field">
               <span>Beweging</span>
-              <div class="segmented" id="alternatingControl" role="group" aria-label="Beweging"><button class="is-active" type="button" data-alternating="false">Één richting</button><button type="button" data-alternating="true">Om en om</button></div>
+              <div class="segmented" id="alternatingControl" role="group" aria-label="Beweging"><button class="is-active" type="button" data-alternating="false">1 richting</button><button type="button" data-alternating="true">Om en om</button></div>
             </div>
+            <label class="field"><span><span>Aantal</span><output id="polonaiseLineCountOutput">1</output></span><input id="polonaiseLineCount" type="range" min="1" max="5" step="1" value="1" /></label>
             <label class="field"><span><span>Snelheid</span><output id="polonaiseSpeedOutput">100%</output></span><input id="polonaiseSpeed" type="range" min="25" max="200" step="1" value="100" /></label>
-            <label class="field"><span><span>Lijnen</span><output id="polonaiseLineCountOutput">3</output></span><input id="polonaiseLineCount" type="range" min="1" max="5" step="1" value="3" /></label>
+            <label class="field"><span><span>Schaal</span><output class="content-scale-output">100%</output></span><input class="content-scale" data-mode="polonaise" type="range" min="35" max="200" step="1" value="100" /></label>
           </section>
 
           <section class="control-section mode-panel" data-panel="party" hidden>
@@ -49,6 +50,7 @@
             <label class="field"><span><span>Ritme variatie</span><output id="noiseOutput">50%</output></span><input id="noise" type="range" min="0" max="100" step="1" value="50" /></label>
             <label class="field"><span><span>Snelheid</span><output id="partySpeedOutput">100%</output></span><input id="partySpeed" type="range" min="10" max="100" step="1" value="100" /></label>
             <label class="field"><span><span>Logo’s</span><output id="partyCountOutput">20</output></span><input id="partyCount" type="range" min="4" max="50" step="1" value="20" /></label>
+            <label class="field"><span><span>Schaal</span><output class="content-scale-output">100%</output></span><input class="content-scale" data-mode="party" type="range" min="35" max="200" step="1" value="100" /></label>
           </section>
 
           <section class="control-section appearance-section">
@@ -61,7 +63,6 @@
               <span>Achtergrond</span>
               <div class="palette" id="backgroundPalette" aria-label="Achtergrondkleuren"></div>
             </div>
-            <label class="field scale-field"><span><span>Schaal content</span><output id="contentScaleOutput">100%</output></span><input id="contentScale" type="range" min="35" max="180" step="1" value="100" /></label>
           </section>
 
           <section class="control-section export-section">

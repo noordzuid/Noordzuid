@@ -29,7 +29,7 @@ export const DEFAULT_STATE = {
   width: 1080,
   height: 1920,
   confetti: { text: "noordzuid", size: 2.5, force: 0.15 },
-  polonaise: { logo: "variation", direction: "right", alternating: false, lineCount: 3, linePositions: [0.25, 0.5, 0.75], lineOffsets: [0, 0, 0], speed: 1 },
+  polonaise: { logo: "variation", direction: "right", alternating: false, lineCount: 1, linePositions: [0.25, 0.5, 0.75], lineOffsets: [0, 0, 0], speed: 1 },
   party: { logo: "variation", noise: 0.58, count: 18, speed: 1.0 },
 };
 
