@@ -1,12 +1,12 @@
 @font-face { font-family: "Saans"; src: url("assets/SaansSemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
-:root { color-scheme: light; --ink: #000; --paper: #fff; --panel: #fff; --line: #d4d4d4; --muted: #5d5d5d; --accent: #f28eff; --control: #fff; }
+:root { color-scheme: light; --ink: #000; --paper: #fff; --line: #d4d4d4; --muted: #5d5d5d; }
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { font-family: "Saans", Arial, sans-serif; color: var(--ink); background: #d9d7d3; font-size: 14px; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 .app-shell { display: grid; grid-template-columns: 340px minmax(0,1fr); width: 100%; height: 100%; }
-.panel { display: flex; min-height: 0; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); z-index: 2; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-weight: 400; }
+.panel { display: flex; min-height: 0; flex-direction: column; background: var(--paper); border-right: 1px solid var(--line); z-index: 2; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-weight: 400; }
 .swap-button { display: grid; place-items: center; border: 0; background: transparent; cursor: pointer; border-radius: 3px;  }
 .swap-button:hover { background: rgba(0,0,0,.07); }
 .mode-switch { display: grid; grid-template-columns: repeat(3,1fr); padding: 12px 16px; gap: 0; border-bottom: 1px solid var(--line); gap: 6px; }
@@ -22,7 +22,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .field:last-child { margin-bottom: 0; }
 .field > span:first-child { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 12px; }
 .field output { color: var(--ink); font-variant-numeric: tabular-nums; }
-textarea, select, input[type="number"] { width: 100%; border: 1px solid #c9c9c9; background: var(--control); border-radius: 4px; outline: 0; }
+textarea, select, input[type="number"] { width: 100%; border: 1px solid #c9c9c9; background: var(--paper); border-radius: 4px; outline: 0; }
 textarea { resize: none; padding: 10px 11px; min-height: 55px; line-height: 1.35; text-transform: lowercase; }
 select, input[type="number"] { height: 36px; padding: 0 10px; }
 textarea:focus, select:focus, input[type="number"]:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
@@ -63,7 +63,7 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
 .export-button:hover { background: #222; }
 .export-button:disabled { cursor: wait; opacity: .55; }
 .export-progress { height: 3px; margin-top: 9px; overflow: hidden; background: rgba(0,0,0,.12); border-radius: 4px; }
-.export-progress span { display: block; height: 100%; width: 0; background: var(--accent); }
+.export-progress span { display: block; height: 100%; width: 0; background: var(--ink); }
 .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr; background: #d3d3d3; }
 .canvas-stage { position: relative; min-width: 0; min-height: 0; padding: 26px; display: grid; place-items: center; overflow: hidden; }
 .canvas-controls { flex-direction: column; align-items: end; position: absolute; top: 14px; right: 18px; z-index: 1; display: flex; gap: 12px; color: rgba(0,0,0,.4); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 11px; line-height: 1; pointer-events: none; }
