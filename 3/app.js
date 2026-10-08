@@ -4,13 +4,28 @@ import { exportMp4, exportPng } from "./exporter.js";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const cloneState = () => ({
-  ...DEFAULT_STATE,
+const COLOR_MODES = ["confetti", "polonaise", "party"];
+const createModeColorSettings = () => Object.fromEntries(COLOR_MODES.map((mode) => [mode, {
+  foreground: DEFAULT_STATE.foreground,
+  background: DEFAULT_STATE.background,
+  varyColors: DEFAULT_STATE.varyColors,
   excludedColors: new Set(DEFAULT_STATE.excludedColors),
-  confetti: { ...DEFAULT_STATE.confetti },
-  polonaise: { ...DEFAULT_STATE.polonaise, linePositions: [...DEFAULT_STATE.polonaise.linePositions], lineOffsets: [...DEFAULT_STATE.polonaise.lineOffsets] },
-  party: { ...DEFAULT_STATE.party },
-});
+}]));
+const cloneState = () => {
+  const colorSettings = createModeColorSettings();
+  const activeColors = colorSettings[DEFAULT_STATE.mode];
+  return {
+    ...DEFAULT_STATE,
+    foreground: activeColors.foreground,
+    background: activeColors.background,
+    varyColors: activeColors.varyColors,
+    excludedColors: activeColors.excludedColors,
+    colorSettings,
+    confetti: { ...DEFAULT_STATE.confetti },
+    polonaise: { ...DEFAULT_STATE.polonaise, linePositions: [...DEFAULT_STATE.polonaise.linePositions], lineOffsets: [...DEFAULT_STATE.polonaise.lineOffsets] },
+    party: { ...DEFAULT_STATE.party },
+  };
+};
 
 const state = cloneState();
 const canvas = $("#artboard");
@@ -21,10 +36,41 @@ let extraConfettiRepeatTimer;
 let extraConfettiPointerPosition = null;
 const history = [];
 
+function saveActiveColorSettings() {
+  const colors = state.colorSettings[state.mode];
+  colors.foreground = state.foreground;
+  colors.background = state.background;
+  colors.varyColors = state.varyColors;
+  colors.excludedColors = state.excludedColors;
+}
+
+function loadModeColorSettings(mode) {
+  const colors = state.colorSettings[mode];
+  state.foreground = colors.foreground;
+  state.background = colors.background;
+  state.varyColors = colors.varyColors;
+  state.excludedColors = colors.excludedColors;
+}
+
+function serializeColorSettings() {
+  saveActiveColorSettings();
+  return Object.fromEntries(COLOR_MODES.map((mode) => {
+    const colors = state.colorSettings[mode];
+    return [mode, { ...colors, excludedColors: [...colors.excludedColors] }];
+  }));
+}
+
+function restoreColorSettings(snapshot) {
+  const defaults = createModeColorSettings();
+  return Object.fromEntries(COLOR_MODES.map((mode) => {
+    const colors = snapshot?.[mode];
+    return [mode, colors ? { ...colors, excludedColors: new Set(colors.excludedColors) } : defaults[mode]];
+  }));
+}
+
 function snapshotState() {
   return {
-    mode: state.mode, foreground: state.foreground, background: state.background, varyColors: state.varyColors,
-    excludedColors: [...state.excludedColors], contentScale: state.contentScale,
+    mode: state.mode, colorSettings: serializeColorSettings(), contentScale: state.contentScale,
     width: state.width, height: state.height,
     confetti: { ...state.confetti },
     polonaise: { ...state.polonaise, linePositions: [...state.polonaise.linePositions], lineOffsets: [...state.polonaise.lineOffsets] },
@@ -41,9 +87,10 @@ function pushHistory() {
 }
 
 function restoreSnapshot(snapshot) {
-  state.mode = snapshot.mode; state.foreground = snapshot.foreground; state.background = snapshot.background;
-  state.varyColors = snapshot.varyColors ?? true;
-  state.excludedColors = new Set(snapshot.excludedColors); state.contentScale = snapshot.contentScale;
+  state.mode = snapshot.mode;
+  state.colorSettings = restoreColorSettings(snapshot.colorSettings);
+  loadModeColorSettings(state.mode);
+  state.contentScale = snapshot.contentScale;
   state.width = snapshot.width; state.height = snapshot.height;
   Object.assign(state.confetti, snapshot.confetti);
   Object.assign(state.polonaise, snapshot.polonaise, { linePositions: [...snapshot.polonaise.linePositions], lineOffsets: [...snapshot.polonaise.lineOffsets] });
@@ -94,7 +141,9 @@ function updateRange(range) {
 }
 
 function setMode(mode) {
+  saveActiveColorSettings();
   state.mode = mode;
+  loadModeColorSettings(mode);
   $$(".mode-button").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
   $$(".mode-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== mode; });
   canvas.style.cursor = mode === "confetti" ? "crosshair" : mode === "polonaise" ? "grab" : "default";
@@ -110,6 +159,7 @@ function setMode(mode) {
     $("#canvasControlAction").textContent = "Backstep";
     secondaryControl.hidden = true;
   }
+  $("#varyColors").checked = state.varyColors;
   updateColorControls();
   scene.modeChanged();
 }
@@ -123,6 +173,11 @@ function exclusionsEnabled() {
   return state.varyColors;
 }
 
+function refreshActiveVariationColors() {
+  if (state.mode === "confetti") scene.recolorStrokes();
+  if (state.mode === "party") scene.recolorParty();
+}
+
 function renderPalette(target, selector) {
   const palette = $(selector);
   palette.replaceChildren();
@@ -132,7 +187,8 @@ function renderPalette(target, selector) {
     swatch.className = "swatch";
     swatch.style.background = color;
     const canExclude = exclusionsEnabled();
-    const isExcluded = canExclude && state.excludedColors.has(color);
+    const isAutomaticallyExcluded = state.mode === "confetti" && color === state.foreground;
+    const isExcluded = canExclude && (state.excludedColors.has(color) || isAutomaticallyExcluded);
     const exclusionLabel = isExcluded ? ", uitgesloten voor kleurvariatie" : "";
     swatch.title = `${color}${isExcluded ? " · niet in kleurvariatie" : ""}`;
     swatch.setAttribute("aria-label", `Kleur ${color}${exclusionLabel}`);
@@ -141,16 +197,14 @@ function renderPalette(target, selector) {
     swatch.addEventListener("click", () => {
       state[target] = color;
       scene.tintCache.clear();
-      scene.recolorStrokes();
-      scene.recolorParty();
+      refreshActiveVariationColors();
       updateColorControls();
     });
     if (canExclude) {
       swatch.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         if (state.excludedColors.has(color)) state.excludedColors.delete(color); else state.excludedColors.add(color);
-        scene.recolorStrokes();
-        scene.recolorParty();
+        refreshActiveVariationColors();
         updateColorControls();
       });
     }
@@ -205,8 +259,7 @@ function bindControls() {
   $("#force").addEventListener("input", (event) => { state.confetti.force = Number(event.target.value) / 100; $("#forceOutput").value = `${event.target.value}%`; });
   $("#varyColors").addEventListener("change", (event) => {
     state.varyColors = event.target.checked;
-    scene.recolorStrokes();
-    scene.recolorParty();
+    refreshActiveVariationColors();
     updateColorControls();
   });
 

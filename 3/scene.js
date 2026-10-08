@@ -243,6 +243,7 @@ export class Scene {
 
   allowedColors() {
     const excluded = new Set(this.state.excludedColors);
+    if (this.state.mode === "confetti") excluded.add(this.state.foreground);
     const allowed = PALETTE.filter((color) => !excluded.has(color));
     return allowed.length ? allowed : [this.state.foreground];
   }
