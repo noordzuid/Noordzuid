@@ -2,15 +2,17 @@ import { LOGOS, PALETTE, STROKES } from "./constants.js";
 
 const TAU = Math.PI * 2;
 const PARTY_PULSE_INTERVAL = 0.72;
+const PARTY_FREQUENCY = 0.5;
 const ROLL_WIND_UP_DURATION = 0.38;
-const ROLL_FALL_RATIO = 0.25;
+const ROLL_FALL_RATIO = 0.32;
 const ROLL_REST_DURATION = 0.07;
+const POLONAISE_SIDESTEP_SPEED = 1.22;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const randomBetween = (min, max) => min + Math.random() * (max - min);
 
-function rollTiming(speed = 1, variation = 1) {
+function rollTiming(speed = 1, variation = 1, fallRatio = ROLL_FALL_RATIO) {
   const windUp = ROLL_WIND_UP_DURATION * variation / Math.max(speed, 0.05);
-  const fall = windUp * ROLL_FALL_RATIO;
+  const fall = windUp * fallRatio;
   const rest = ROLL_REST_DURATION;
   return { windUp, fall, rest, duration: windUp + fall + rest };
 }
@@ -63,6 +65,7 @@ export class Scene {
     this.partyPulseElapsed = 0;
     this.partyPulseIndex = 0;
     this.polonaiseLines = [];
+    this.polonaiseSidestepRequest = 0;
     this.polonaiseDragIndex = null;
     this.polonaiseDragStart = null;
     this.time = 0;
@@ -94,6 +97,7 @@ export class Scene {
   reset() {
     this.time = 0;
     this.polonaiseLines = [];
+    this.polonaiseSidestepRequest = 0;
     this.polonaiseDragIndex = null;
     this.polonaiseDragStart = null;
     this.createConfetti();
@@ -161,6 +165,7 @@ export class Scene {
       progress: 1, duration: 1,
       angle: baseAngle, startAngle: baseAngle, targetAngle: baseAngle,
       seed: randomBetween(0, 100), logo: this.pickLogo(index), size,
+      colorIndex: index,
       };
     });
   }
@@ -168,7 +173,16 @@ export class Scene {
   syncConfetti() { this.createConfetti(); }
   syncParty() { this.createParty(); }
 
-  resetPolonaiseLines() { this.polonaiseLines = []; }
+  recolorParty() {
+    this.party.forEach((item, index) => { item.colorIndex = index; });
+  }
+
+  resetPolonaiseLines() {
+    this.polonaiseLines = [];
+    this.polonaiseSidestepRequest = 0;
+  }
+
+  queuePolonaiseSidestep() { this.polonaiseSidestepRequest += 1; }
 
   setPolonaiseLineCount(count) {
     const lineCount = clamp(Math.round(count), 1, 5);
@@ -229,7 +243,6 @@ export class Scene {
 
   allowedColors() {
     const excluded = new Set(this.state.excludedColors);
-    excluded.add(this.state.foreground);
     const allowed = PALETTE.filter((color) => !excluded.has(color));
     return allowed.length ? allowed : [this.state.foreground];
   }
@@ -238,7 +251,7 @@ export class Scene {
     const colors = this.allowedColors();
     for (const particle of this.confetti) {
       if (particle.type !== "stroke") continue;
-      particle.color = this.state.confetti.randomStrokeColors
+      particle.color = this.state.varyColors
         ? colors[Math.floor(Math.random() * colors.length)]
         : this.state.foreground;
     }
@@ -272,7 +285,7 @@ export class Scene {
       collisionMargin: base * 0.06,
       gravityScale: 1, supportedGravityScale: 0.32,
       angle: direction, spin: randomBetween(-2.2, 2.2), restitution: 0.14,
-      color: this.state.confetti.randomStrokeColors ? colors[Math.floor(Math.random() * colors.length)] : this.state.foreground,
+      color: this.state.varyColors ? colors[Math.floor(Math.random() * colors.length)] : this.state.foreground,
     };
     this.prepareRigidBody(particle);
     this.confetti.push(particle);
@@ -583,36 +596,44 @@ export class Scene {
 
   advancePolonaise(dt, settings, lineIndex) {
     if (!this.polonaiseLines[lineIndex]) {
-      this.polonaiseLines[lineIndex] = { step: 0, rhythmIndex: 0, beatTime: 0 };
+      this.polonaiseLines[lineIndex] = {
+        step: 0,
+        beatTime: 0,
+        motion: "forward",
+        pendingSidesteps: 0,
+        seenSidestepRequest: 0,
+      };
     }
     const runtime = this.polonaiseLines[lineIndex];
+    const newRequests = this.polonaiseSidestepRequest - runtime.seenSidestepRequest;
+    if (newRequests > 0) {
+      runtime.pendingSidesteps += newRequests;
+      runtime.seenSidestepRequest = this.polonaiseSidestepRequest;
+    }
     runtime.beatTime += dt;
-    let beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
-    let timing = rollTiming(settings.speed, beat.duration);
+    let timing = rollTiming(settings.speed * (runtime.motion === "backward" ? POLONAISE_SIDESTEP_SPEED : 1));
     while (runtime.beatTime >= timing.duration) {
       runtime.beatTime -= timing.duration;
-      runtime.step += 1;
-      runtime.rhythmIndex += 1;
-      beat = this.polonaiseBeat(runtime.rhythmIndex, settings.noise, lineIndex);
-      timing = rollTiming(settings.speed, beat.duration);
+      if (runtime.motion === "backward") {
+        runtime.step -= 1;
+        runtime.motion = "forward";
+      } else {
+        runtime.step += 1;
+        if (runtime.pendingSidesteps > 0) {
+          runtime.pendingSidesteps -= 1;
+          runtime.motion = "backward";
+        }
+      }
+      timing = rollTiming(settings.speed * (runtime.motion === "backward" ? POLONAISE_SIDESTEP_SPEED : 1));
     }
-    return { step: runtime.step, phase: rollPhase(runtime.beatTime, timing) };
-  }
-
-  polonaiseBeat(index, intensity = 0, lineIndex = 0) {
-    // Two incommensurate waves make a calm, repeatable quasi-random rhythm.
-    // Every line gets its own phase, breaking the rows into one long procession.
-    const linePhase = lineIndex * 1.731;
-    const first = Math.sin(index * 0.83 + linePhase + 0.6);
-    const second = Math.sin(index * 0.37 + linePhase * 0.61 + 2.1) * 0.5;
-    const rhythmNoise = (first + second) / 1.5;
-    const amount = clamp(intensity, 0, 1);
     return {
-      duration: 1 + rhythmNoise * 0.14 * amount,
+      step: runtime.step,
+      phase: rollPhase(runtime.beatTime, timing),
+      movementDirection: runtime.motion === "backward" ? -1 : 1,
     };
   }
 
-  tumbleStep(start, floor, size, horizontal, sign, step, phase) {
+  tumbleStep(start, floor, size, horizontal, sign, step, phase, orientationSign = sign) {
     const half = size * 0.5;
     let pivotX; let pivotY; let vectorX; let vectorY; let rotation;
     if (horizontal) {
@@ -628,7 +649,7 @@ export class Scene {
     return {
       x: pivotX + vectorX * cos - vectorY * sin,
       y: pivotY + vectorX * sin + vectorY * cos,
-      angle: (horizontal ? sign : -sign) * (step + phase) * Math.PI * 0.5,
+      angle: ((horizontal ? orientationSign : -orientationSign) * step + (horizontal ? sign : -sign) * phase) * Math.PI * 0.5,
     };
   }
 
@@ -639,23 +660,27 @@ export class Scene {
     const { horizontal, size, margin, centers } = geometry;
     const travelLength = horizontal ? width : height;
     const spacing = size + margin;
+    const colors = this.allowedColors();
 
     centers.forEach((center, lineIndex) => {
       const beat = this.advancePolonaise(dt, settings, lineIndex);
       let sign = settings.direction === "right" || settings.direction === "down" ? 1 : -1;
       if (settings.alternating && lineIndex % 2) sign *= -1;
       const completedOffset = sign * beat.step * size + settings.lineOffsets[lineIndex];
+      const movementSign = sign * beat.movementDirection;
       const firstIndex = Math.floor((-size - completedOffset) / spacing) - 2;
       const lastIndex = Math.ceil((travelLength + size - completedOffset) / spacing) + 2;
       for (let index = firstIndex; index <= lastIndex; index += 1) {
         const start = index * spacing + completedOffset;
         const floor = center + size * 0.5;
-        const position = this.tumbleStep(start, floor, size, horizontal, sign, beat.step, beat.phase);
+        const position = this.tumbleStep(start, floor, size, horizontal, movementSign, beat.step, beat.phase, sign);
         if (horizontal && (position.x < -size || position.x > width + size)) continue;
         if (!horizontal && (position.y < -size || position.y > height + size)) continue;
         const asset = this.pickLogo(index + lineIndex * 3, settings.logo);
         const alternatingRotation = ((index + lineIndex) & 1) * Math.PI * 0.5;
-        this.drawLogo(asset, position.x, position.y, size, position.angle + alternatingRotation, this.state.foreground);
+        const colorIndex = ((index + lineIndex * 2) % colors.length + colors.length) % colors.length;
+        const color = this.state.varyColors ? colors[colorIndex] : this.state.foreground;
+        this.drawLogo(asset, position.x, position.y, size, position.angle + alternatingRotation, color);
       }
     });
   }
@@ -676,10 +701,8 @@ export class Scene {
   partyMotion(item, settings) {
     const influence = clamp(settings.noise, 0, 1);
     const speedNoise = (this.partyFieldValue(item.col, item.row, this.time) - 0.5) * 2;
-    const frequencyNoise = (this.partyFieldValue(item.col, item.row, this.time, 1) - 0.5) * 2;
     const localSpeed = clamp(settings.speed + speedNoise * influence, 0.05, 1);
-    const localFrequency = clamp(settings.frequency + frequencyNoise * influence, 0, 1);
-    return { timing: rollTiming(0.25 + localSpeed * 0.75), frequency: localFrequency };
+    return { timing: rollTiming(0.25 + localSpeed * 0.75), frequency: PARTY_FREQUENCY };
   }
 
   partyRollChance(item, channel = 0) {
@@ -718,6 +741,7 @@ export class Scene {
 
   renderParty(dt) {
     const settings = this.state.party;
+    const colors = this.allowedColors();
     const speedScale = 0.25 + clamp(settings.speed, 0, 1) * 0.75;
     const pulseInterval = PARTY_PULSE_INTERVAL / speedScale;
     this.partyPulseElapsed += dt;
@@ -772,7 +796,9 @@ export class Scene {
       const x = horizontal ? rolled.x + gapOffset : rolled.x;
       const y = horizontal ? rolled.y : rolled.y + gapOffset;
       const angle = item.startAngle + (item.targetAngle - item.startAngle) * phase;
-      this.drawLogo(item.logo, x, y, item.size, angle, this.state.foreground);
+      const colorIndex = ((item.colorIndex || 0) % colors.length + colors.length) % colors.length;
+      const color = this.state.varyColors ? colors[colorIndex] : this.state.foreground;
+      this.drawLogo(item.logo, x, y, item.size, angle, color);
     }
   }
 

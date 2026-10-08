@@ -7,7 +7,7 @@
     <meta name="description" content="Noordzuid animatietool voor merkbeelden en animaties." />
     <title>Noordzuid animatietool</title>
     <link rel="icon" href="assets/NZ.ico" sizes="32x32" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=20261008-1" />
   </head>
   <body>
     <main class="app-shell">
@@ -24,7 +24,6 @@
             <label class="field field-text"><span>Tekst</span><textarea id="confettiText" rows="2" maxlength="56" spellcheck="false">noordzuid</textarea></label>
             <label class="field"><span><span>Grootte</span><output id="confettiSizeOutput">0%</output></span><input id="confettiSize" type="range" min="0" max="100" step="1" value="0" /></label>
             <label class="field"><span><span>Kracht</span><output id="forceOutput">60%</output></span><input id="force" type="range" min="0" max="100" step="1" value="60" /></label>
-            <div class="toggle-row"><span>Random kleuren</span><label class="switch" aria-label="Confetti random kleur"><input id="randomStrokeColors" type="checkbox" checked /></label></div>
           </section>
 
           <section class="control-section mode-panel" data-panel="polonaise" hidden>
@@ -40,7 +39,6 @@
               <span>Beweging</span>
               <div class="segmented" id="alternatingControl" role="group" aria-label="Beweging"><button class="is-active" type="button" data-alternating="false">Één richting</button><button type="button" data-alternating="true">Om en om</button></div>
             </div>
-            <label class="field"><span><span>Noise</span><output id="polonaiseNoiseOutput">0%</output></span><input id="polonaiseNoise" type="range" min="0" max="100" step="1" value="0" /></label>
             <label class="field"><span><span>Snelheid</span><output id="polonaiseSpeedOutput">100%</output></span><input id="polonaiseSpeed" type="range" min="25" max="200" step="1" value="100" /></label>
             <label class="field"><span><span>Lijnen</span><output id="polonaiseLineCountOutput">3</output></span><input id="polonaiseLineCount" type="range" min="1" max="5" step="1" value="3" /></label>
           </section>
@@ -49,12 +47,12 @@
             <div class="section-heading"><h2>Party</h2></div>
             <label class="field"><span>Logo</span><select id="partyLogo"></select></label>
             <label class="field"><span><span>Noise</span><output id="noiseOutput">58%</output></span><input id="noise" type="range" min="0" max="100" step="1" value="58" /></label>
-            <label class="field"><span><span>Frequentie</span><output id="partyFrequencyOutput">50%</output></span><input id="partyFrequency" type="range" min="0" max="100" step="1" value="50" /></label>
             <label class="field"><span><span>Snelheid</span><output id="partySpeedOutput">100%</output></span><input id="partySpeed" type="range" min="10" max="100" step="1" value="100" /></label>
             <label class="field"><span><span>Logo’s</span><output id="partyCountOutput">18</output></span><input id="partyCount" type="range" min="4" max="48" step="1" value="18" /></label>
           </section>
 
           <section class="control-section appearance-section">
+            <div class="toggle-row variation-toggle"><span>Variërende kleuren</span><label class="switch" aria-label="Variërende kleuren"><input id="varyColors" type="checkbox" checked /></label></div>
             <div class="palette-setting">
               <span>Voorgrond</span>
               <div class="palette" id="foregroundPalette" aria-label="Voorgrondkleuren"></div>
@@ -77,14 +75,20 @@
               <label class="field"><span>Formaat</span><select id="exportFormat"><option value="mp4">MP4</option><option value="png">PNG</option></select></label>
               <label class="field duration-field"><span>Lengte</span><div class="input-suffix"><input id="exportDuration" type="number" min="1" max="30" step="1" value="6" /><span>sec</span></div></label>
             </div>
-            <button class="export-button" id="exportButton" type="button"><span>Exporteer MP4</span><small>1080 × 1920</small></button>
+            <button class="export-button" id="exportButton" type="button"><span>Exporteer MP4</span></button>
             <div class="export-progress" id="exportProgress" hidden><span></span></div>
           </section>
         </div>
       </aside>
 
       <section class="workspace" aria-label="Canvas werkruimte">
-        <div class="canvas-stage" id="canvasStage"><div class="canvas-frame" id="canvasFrame"><canvas id="artboard" width="1080" height="1920" aria-label="Voorvertoning"></canvas></div></div>
+        <div class="canvas-stage" id="canvasStage">
+          <div class="canvas-controls" id="canvasControls" aria-live="polite">
+            <span class="canvas-control" id="canvasControlPrimary"><kbd id="canvasControlButton">LMB</kbd><span id="canvasControlAction">Explosie</span></span>
+            <span class="canvas-control" id="canvasControlSecondary"><kbd>RMB</kbd><span>Extra confetti</span></span>
+          </div>
+          <div class="canvas-frame" id="canvasFrame"><canvas id="artboard" width="1080" height="1920" aria-label="Voorvertoning"></canvas></div>
+        </div>
       </section>
     </main>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
