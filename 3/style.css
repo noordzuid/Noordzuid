@@ -64,12 +64,12 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border: 0; bo
 .export-progress { height: 3px; margin-top: 9px; overflow: hidden; background: rgba(0,0,0,.12); border-radius: 4px; }
 .export-progress span { display: block; height: 100%; width: 0; background: var(--ink); }
 .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 1fr; background: #d3d3d3; }
-.canvas-stage { position: relative; min-width: 0; min-height: 0; padding: 26px; display: grid; place-items: center; overflow: hidden; }
-.canvas-controls { flex-direction: column; align-items: end; position: absolute; top: 14px; right: 18px; z-index: 1; display: flex; gap: 12px; color: rgba(0,0,0,.4); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 11px; line-height: 1; pointer-events: none; }
+.canvas-stage { position: relative; isolation: isolate; min-width: 0; min-height: 0; padding: 26px; display: grid; place-items: center; overflow: hidden; }
+.canvas-controls { flex-direction: column; align-items: end; position: absolute; top: 14px; right: 18px; z-index: 0; display: flex; gap: 12px; color: rgba(0,0,0,.4); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 11px; line-height: 1; pointer-events: none; }
 .canvas-control { display: flex; align-items: center; gap: 6px; }
 .canvas-controls kbd { padding: 4px 6px; border: 1px solid rgba(0,0,0,.2); border-radius: 4px; background: rgba(255,255,255,.50); color: rgba(0,0,0,.4); font: inherit; font-weight: 500; }
 .canvas-control > span { letter-spacing: .01em; }
-.canvas-frame { position: relative; max-width: 100%; max-height: 100%; background: white; box-shadow: 0 8px 35px rgba(0,0,0,.18); overflow: hidden; }
+.canvas-frame { position: relative; z-index: 1; max-width: 100%; max-height: 100%; background: white; box-shadow: 0 8px 35px rgba(0,0,0,.18); overflow: hidden; }
 #artboard { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
 .toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%,14px); opacity: 0; pointer-events: none; background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: 6px; font-size: 12px; z-index: 10; transition: .2s ease; }
 .toast.is-visible { opacity: 1; transform: translate(-50%,0); }

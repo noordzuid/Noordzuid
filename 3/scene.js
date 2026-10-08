@@ -705,7 +705,7 @@ export class Scene {
   partyMotion(item, settings) {
     const influence = clamp(settings.noise, 0, 1);
     const speedNoise = (this.partyFieldValue(item.col, item.row, this.time) - 0.5) * 2;
-    const localSpeed = clamp(settings.speed + speedNoise * influence, 0.05, 1);
+    const localSpeed = clamp(settings.speed + speedNoise * influence, 0.05, 2);
     return { timing: rollTiming(0.25 + localSpeed * 0.75), frequency: PARTY_FREQUENCY };
   }
 
@@ -746,7 +746,7 @@ export class Scene {
   renderParty(dt) {
     const settings = this.state.party;
     const colors = this.allowedColors();
-    const speedScale = 0.25 + clamp(settings.speed, 0, 1) * 0.75;
+    const speedScale = 0.25 + clamp(settings.speed, 0, 2) * 0.75;
     const pulseInterval = PARTY_PULSE_INTERVAL / speedScale;
     this.partyPulseElapsed += dt;
     let pulse = false;
