@@ -192,7 +192,7 @@ function renderPalette(target, selector) {
     swatch.className = "swatch";
     swatch.style.background = color;
     const canExclude = exclusionsEnabled();
-    const isAutomaticallyExcluded = state.mode === "confetti" && color === state.foreground;
+    const isAutomaticallyExcluded = state.mode === "confetti" && (color === state.foreground || color === state.background);
     const isExcluded = canExclude && (state.excludedColors.has(color) || isAutomaticallyExcluded);
     const exclusionLabel = isExcluded ? ", uitgesloten voor kleurvariatie" : "";
     swatch.title = `${color}${isExcluded ? " · niet in kleurvariatie" : ""}`;
