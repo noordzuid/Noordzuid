@@ -1,240 +1,98 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="nl">
   <head>
-    <meta charset="utf-8" />
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Noordzuid animatie tool</title>
-    <link rel="icon" type="image/x-icon" href="./assets/N3.ico">
-    <link rel="stylesheet" href="style.css" />
-    <script src="libraries/p5.min.js"></script>
+    <meta name="theme-color" content="#ebe8e4" />
+    <meta name="description" content="Noordzuid animatietool voor merkbeelden en animaties." />
+    <title>Noordzuid animatietool</title>
+    <link rel="icon" href="assets/NZ1.ico" sizes="32x32" />
+    <link rel="stylesheet" href="style.css?v=20261008-1" />
   </head>
-
   <body>
-    <main class="tool">
-      <aside class="panel">
-        <section class="section">
-          <h1>Schets</h1>
+    <main class="app-shell">
+      <aside class="panel" aria-label="Instellingen">
+        <nav class="mode-switch" aria-label="Modus">
+          <button class="mode-button is-active" type="button" data-mode="confetti">Confetti</button>
+          <button class="mode-button" type="button" data-mode="polonaise">Polonaise</button>
+          <button class="mode-button" type="button" data-mode="party">Party</button>
+        </nav>
 
-          <div class="control">
-            <label for="mode">Modus</label>
-            <select id="mode">
-              <option value="logo" selected>Logo</option>
-              <option value="pattern">Patroon</option>
-              <option value="noise">Noise veld</option>
-              <option value="confetti">Confetti</option>
-            </select>
-          </div>
+        <div class="panel-scroll">
+          <section class="control-section mode-panel" data-panel="confetti">
+            <div class="section-heading"><h2>Confetti</h2></div>
+            <label class="field field-text"><span>Tekst</span><textarea id="confettiText" rows="2" maxlength="100" spellcheck="false">noordzuid</textarea></label>
+            <label class="field"><span><span>Kracht</span><output id="forceOutput">60%</output></span><input id="force" type="range" min="0" max="100" step="1" value="60" /></label>
+            <label class="field"><span><span>Schaal</span><output id="confettiSizeOutput">0%</output></span><input id="confettiSize" type="range" min="0" max="150" step="1" value="0" /></label>
+          </section>
 
-          <div id="mode-settings" class="mode-settings">
-          <div id="pattern-controls" class="mode-controls" hidden>
-            <div id="pattern" class="option-buttons" role="group" aria-label="Patroon">
-              <button data-value="empty">Leeg</button>
-              <button data-value="alternating">Om en om</button>
-              <button data-value="line">Lijn</button>
-              <button data-value="lines">Lijnen</button>
-              <button data-value="cross">Kruis</button>
-              <button data-value="diagonal">X</button>
-              <button data-value="ring">Ringen</button>
+          <section class="control-section mode-panel" data-panel="polonaise" hidden>
+            <div class="section-heading"><h2>Polonaise</h2></div>
+            <label class="field"><span>Logo</span><select id="polonaiseLogo"></select></label>
+            <div class="field">
+              <span>Richting</span>
+              <div class="direction-grid" id="directionGrid" role="group" aria-label="Richting">
+                <button type="button" data-direction="up" aria-label="Naar boven">↑</button><button type="button" data-direction="left" aria-label="Naar links">←</button><button type="button" data-direction="down" aria-label="Naar onder">↓</button><button class="is-active" type="button" data-direction="right" aria-label="Naar rechts">→</button>
+              </div>
             </div>
-          </div>
-
-          <div id="noise-controls" class="mode-controls" hidden>
-            <div id="noise-motion" class="option-buttons" role="group" aria-label="Noise beweging">
-              <button data-value="calm">Rustig</button>
-              <button data-value="playful">Normaal</button>
-              <button data-value="wild">Snel</button>
+            <div class="field">
+              <span>Beweging</span>
+              <div class="segmented" id="alternatingControl" role="group" aria-label="Beweging"><button class="is-active" type="button" data-alternating="false">1 richting</button><button type="button" data-alternating="true">Om en om</button></div>
             </div>
+            <label class="field"><span><span>Aantal</span><output id="polonaiseLineCountOutput">1</output></span><input id="polonaiseLineCount" type="range" min="1" max="5" step="1" value="1" /></label>
+            <label class="field"><span><span>Snelheid</span><output id="polonaiseSpeedOutput">100%</output></span><input id="polonaiseSpeed" type="range" min="25" max="200" step="1" value="100" /></label>
+            <label class="field"><span><span>Schaal</span><output class="content-scale-output">100%</output></span><input class="content-scale" data-mode="polonaise" type="range" min="35" max="200" step="1" value="100" /></label>
+          </section>
 
-            <div id="noise-density" class="option-buttons" role="group" aria-label="Noise vulling">
-              <button data-value="airy">Luchtig</button>
-              <button data-value="balanced">Gemiddeld</button>
-              <button data-value="full">Vol</button>
+          <section class="control-section mode-panel" data-panel="party" hidden>
+            <div class="section-heading"><h2>Party</h2></div>
+            <label class="field"><span>Logo</span><select id="partyLogo"></select></label>
+            <label class="field"><span><span>Ritme variatie</span><output id="noiseOutput">50%</output></span><input id="noise" type="range" min="0" max="100" step="1" value="50" /></label>
+            <label class="field"><span><span>Snelheid</span><output id="partySpeedOutput">100%</output></span><input id="partySpeed" type="range" min="10" max="200" step="1" value="100" /></label>
+            <label class="field"><span><span>Logo’s</span><output id="partyCountOutput">20</output></span><input id="partyCount" type="range" min="4" max="50" step="1" value="20" /></label>
+            <label class="field"><span><span>Schaal</span><output class="content-scale-output">100%</output></span><input class="content-scale" data-mode="party" type="range" min="35" max="200" step="1" value="100" /></label>
+          </section>
+
+          <section class="control-section appearance-section">
+            <div class="toggle-row variation-toggle"><span>Variërende kleuren</span><label class="switch" aria-label="Variërende kleuren"><input id="varyColors" type="checkbox" checked /></label></div>
+            <div class="palette-setting">
+              <span>Voorgrond</span>
+              <div class="palette" id="foregroundPalette" aria-label="Voorgrondkleuren"></div>
             </div>
-
-          </div>
-
-          <div id="logo-controls" class="mode-controls">
-            <div id="logo-layout" class="option-buttons" role="group" aria-label="Logo opstelling">
-              <button data-value="horizontal">Naast elkaar</button>
-              <button data-value="vertical">Boven elkaar</button>
-              <button data-value="single">Enkel</button>
+            <div class="palette-setting">
+              <span>Achtergrond</span>
+              <div class="palette" id="backgroundPalette" aria-label="Achtergrondkleuren"></div>
             </div>
-          </div>
+          </section>
 
-          </div>
-
-          <div class="control">
-            <label for="grid-size">Zoom</label>
-            <div class="range-with-value">
-              <input id="grid-size" type="range" min="0" max="32" value="20" step="1" />
-              <output id="grid-size-value" for="grid-size">64 px</output>
+          <section class="control-section export-section">
+            <div class="section-heading"><h2>Export</h2></div>
+            <div class="size-row">
+              <label class="field"><span>Breedte</span><input id="canvasWidth" type="number" min="100" max="4096" step="1" value="1080" /></label>
+              <button id="swapDimensions" class="swap-button size-swap" type="button" aria-label="Breedte en hoogte omwisselen">⇄</button>
+              <label class="field"><span>Hoogte</span><input id="canvasHeight" type="number" min="100" max="4096" step="1" value="1920" /></label>
             </div>
-          </div>
-
-          <div class="control">
-            <label for="focus-logo">Focus op logo</label>
-            <input id="focus-logo" type="checkbox" />
-          </div>
-
-          <div class="control">
-            <label for="show-grid">Grid lijnen</label>
-            <input id="show-grid" type="checkbox" />
-          </div>
-
-          <div class="control">
-            <label for="logo-variant">Stijl</label>
-            <select id="logo-variant"></select>
-          </div>
-
-          <div id="text-controls" class="mode-settings" hidden>
-            <div class="control">
-              <label for="logo-text">Tekst</label>
-              <input id="logo-text" type="text" value="NOORDZUID" />
+            <div class="export-row">
+              <label class="field"><span>Formaat</span><select id="exportFormat"><option value="mp4">MP4</option><option value="png">PNG</option></select></label>
+              <label class="field duration-field"><span>Lengte</span><div class="input-suffix"><input id="exportDuration" type="number" min="1" max="30" step="1" value="6" /><span>sec</span></div></label>
             </div>
-            <div class="control">
-              <label for="text-once">Tekst één keer</label>
-              <input id="text-once" type="checkbox" />
-            </div>
-          </div>
-
-          <div class="control">
-            <span>Voorgrond</span>
-            <div class="swatches" id="foreground-colors">
-              <button class="swatch" data-color="#270C13" style="--color:#270C13" aria-label="Donkerpaars"></button>
-              <button class="swatch" data-color="#F28EFF" style="--color:#F28EFF" aria-label="Roze"></button>
-              <button class="swatch" data-color="#353214" style="--color:#353214" aria-label="Donkergroen"></button>
-              <button class="swatch active" data-color="#FF8D8C" style="--color:#FF8D8C" aria-label="Zalm"></button>
-              <button class="swatch" data-color="#DDAAFF" style="--color:#DDAAFF" aria-label="Lila"></button>
-              <button class="swatch" data-color="#8BCAFF" style="--color:#8BCAFF" aria-label="Blauw"></button>
-              <button class="swatch" data-color="#D4F2AA" style="--color:#D4F2AA" aria-label="Lime"></button>
-              <button class="swatch" data-color="#053530" style="--color:#053530" aria-label="Donker zeeblauw"></button>
-              <button class="swatch" data-color="#EBE8E4" style="--color:#EBE8E4" aria-label="Beige"></button>
-            </div>
-          </div>
-
-          <div class="control">
-            <span>Achtergrond</span>
-            <div class="swatches" id="background-colors">
-              <button class="swatch active" data-color="#270C13" style="--color:#270C13" aria-label="Donkerpaars"></button>
-              <button class="swatch" data-color="#F28EFF" style="--color:#F28EFF" aria-label="Roze"></button>
-              <button class="swatch" data-color="#353214" style="--color:#353214" aria-label="Donkergroen"></button>
-              <button class="swatch" data-color="#FF8D8C" style="--color:#FF8D8C" aria-label="Zalm"></button>
-              <button class="swatch" data-color="#DDAAFF" style="--color:#DDAAFF" aria-label="Lila"></button>
-              <button class="swatch" data-color="#8BCAFF" style="--color:#8BCAFF" aria-label="Blauw"></button>
-              <button class="swatch" data-color="#D4F2AA" style="--color:#D4F2AA" aria-label="Lime"></button>
-              <button class="swatch" data-color="#053530" style="--color:#053530" aria-label="Donker zeeblauw"></button>
-              <button class="swatch" data-color="#EBE8E4" style="--color:#EBE8E4" aria-label="Beige"></button>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
-          <h2>Keyframes</h2>
-
-          <div class="control">
-              <label for="easing">Easing</label>
-            <select id="easing">
-              <optgroup label="Basis">
-                <option value="linear">Linear</option>
-                <option value="easeInQuad">Ease in quad</option>
-                <option value="easeOutQuad">Ease out quad</option>
-                <option value="easeInOutQuad">Ease in-out quad</option>
-                <option value="easeInCubic" selected>Ease in cubic</option>
-                <option value="easeOutCubic">Ease out cubic</option>
-                <option value="easeInOutCubic">Ease in-out cubic</option>
-                <option value="easeInQuart">Ease in quart</option>
-                <option value="easeOutQuart">Ease out quart</option>
-                <option value="easeInOutQuart">Ease in-out quart</option>
-                <option value="easeInQuint">Ease in quint</option>
-                <option value="easeOutQuint">Ease out quint</option>
-                <option value="easeInOutQuint">Ease in-out quint</option>
-              </optgroup>
-              <optgroup label="Vloeiend">
-                <option value="easeInSine">Ease in sine</option>
-                <option value="easeOutSine">Ease out sine</option>
-                <option value="easeInOutSine">Ease in-out sine</option>
-                <option value="easeInExpo">Ease in expo</option>
-                <option value="easeOutExpo">Ease out expo</option>
-                <option value="easeInOutExpo">Ease in-out expo</option>
-                <option value="easeInCirc">Ease in circ</option>
-                <option value="easeOutCirc">Ease out circ</option>
-                <option value="easeInOutCirc" selected>Ease in-out circ</option>
-              </optgroup>
-              <optgroup label="Funky">
-                <option value="easeInBack">Back in</option>
-                <option value="easeOutBack">Back out</option>
-                <option value="easeInOutBack">Back in-out</option>
-                <option value="easeInBounce">Bounce in</option>
-                <option value="easeOutBounce">Bounce out</option>
-                <option value="easeInOutBounce">Bounce in-out</option>
-                <option value="easeInElastic">Elastic in</option>
-                <option value="easeOutElastic">Elastic out</option>
-                <option value="easeInOutElastic">Elastic in-out</option>
-                <option value="steps4">Steps ×4</option>
-                <option value="steps8">Steps ×8</option>
-                <option value="wiggle">Wiggle</option>
-              </optgroup>
-            </select>
-          </div>
-
-          <div class="control">
-            <label for="stagger">Stagger</label>
-            <input id="stagger" type="range" min="0" max="1" value="0" step="0.1" />
-          </div>
-
-          <div class="control align-start">
-            <label for="keyframe-list">Keyframes</label>
-            <select id="keyframe-list" size="5"></select>
-          </div>
-
-          <div class="keyframe-buttons">
-            <button id="add-keyframe">+</button>
-            <button id="remove-keyframe">−</button>
-          </div>
-
-          <div class="control">
-            <label for="duration">Lengte keyframe</label>
-            <input id="duration" type="number" min="100" step="100" value="800" />
-          </div>
-
-          <div class="control">
-            <label for="animation-duration">Lengte animatie</label>
-            <input id="animation-duration" type="number" min="100" step="100" value="800" />
-          </div>
-
-          <div class="control">
-            <span></span>
-            <button id="play">Play</button>
-          </div>
-        </section>
-
-        <section class="section">
-          <h2>Export</h2>
-
-          <div class="control">
-            <label for="canvas-width">Breedte</label>
-            <input id="canvas-width" type="number" min="200" max="6000" value="1920" />
-          </div>
-
-          <div class="control">
-            <label for="canvas-height">Hoogte</label>
-            <input id="canvas-height" type="number" min="200" max="6000" value="1080" />
-          </div>
-
-          <div class="export-buttons">
-            <button id="export-png">PNG</button>
-            <button id="export-mp4">MP4</button>
-          </div>
-
-          <p id="status" aria-live="polite"></p>
-        </section>
+            <button class="export-button" id="exportButton" type="button"><span>Exporteer MP4</span></button>
+            <div class="export-progress" id="exportProgress" hidden><span></span></div>
+          </section>
+        </div>
       </aside>
 
-      <section class="stage">
-        <div id="canvas-container"></div>
+      <section class="workspace" aria-label="Canvas werkruimte">
+        <div class="canvas-stage" id="canvasStage">
+          <div class="canvas-controls" id="canvasControls" aria-live="polite">
+            <span class="canvas-control" id="canvasControlPrimary"><kbd id="canvasControlButton">LMB</kbd><span id="canvasControlAction">Explosie</span></span>
+            <span class="canvas-control" id="canvasControlSecondary"><kbd>RMB</kbd><span>Extra confetti</span></span>
+          </div>
+          <div class="canvas-frame" id="canvasFrame"><canvas id="artboard" width="1080" height="1920" aria-label="Voorvertoning"></canvas></div>
+        </div>
       </section>
     </main>
-
-    <script src="sketch.js"></script>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="app.js"></script>
   </body>
 </html>
