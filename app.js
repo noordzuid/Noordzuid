@@ -1,4 +1,4 @@
-import { DEFAULT_STATE, PALETTE, makeLogoOptions } from "./constants.js";
+import { DEFAULT_STATE, PALETTE, TEXT_POSITIONS, makeLogoOptions } from "./constants.js";
 import { Scene } from "./scene.js";
 import { exportMp4, exportPng } from "./exporter.js";
 
@@ -24,6 +24,7 @@ const cloneState = () => {
     excludedColors: activeColors.excludedColors,
     colorSettings,
     contentScales,
+    textItems: DEFAULT_STATE.textItems.map((item) => ({ ...item })),
     confetti: { ...DEFAULT_STATE.confetti },
     polonaise: { ...DEFAULT_STATE.polonaise, linePositions: [...DEFAULT_STATE.polonaise.linePositions], lineOffsets: [...DEFAULT_STATE.polonaise.lineOffsets] },
     party: { ...DEFAULT_STATE.party },
@@ -37,6 +38,8 @@ let toastTimer;
 let resizeTimer;
 let extraConfettiRepeatTimer;
 let extraConfettiPointerPosition = null;
+let activeTextId = null;
+let nextTextId = 1;
 const history = [];
 
 function saveActiveModeSettings() {
@@ -77,6 +80,7 @@ function snapshotState() {
   return {
     mode: state.mode, colorSettings: serializeColorSettings(), contentScales: { ...state.contentScales },
     width: state.width, height: state.height,
+    textItems: state.textItems.map((item) => ({ ...item })),
     confetti: { ...state.confetti },
     polonaise: { ...state.polonaise, linePositions: [...state.polonaise.linePositions], lineOffsets: [...state.polonaise.lineOffsets] },
     party: { ...state.party },
@@ -97,10 +101,12 @@ function restoreSnapshot(snapshot) {
   state.contentScales = { ...createModeScales(), ...snapshot.contentScales };
   loadModeSettings(state.mode);
   state.width = snapshot.width; state.height = snapshot.height;
+  state.textItems = (snapshot.textItems || []).map((item) => ({ ...item }));
   Object.assign(state.confetti, snapshot.confetti);
   Object.assign(state.polonaise, snapshot.polonaise, { linePositions: [...snapshot.polonaise.linePositions], lineOffsets: [...snapshot.polonaise.lineOffsets] });
   Object.assign(state.party, snapshot.party);
   syncControlsFromState();
+  closeTextMenu();
   scene.tintCache.clear(); scene.reset();
 }
 
@@ -153,8 +159,10 @@ function setMode(mode) {
   $$(".mode-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== mode; });
   canvas.style.cursor = mode === "confetti" ? "crosshair" : mode === "polonaise" ? "grab" : "default";
   const canvasControls = $("#canvasControls");
+  const primaryControl = $("#canvasControlPrimary");
   const secondaryControl = $("#canvasControlSecondary");
-  canvasControls.hidden = mode === "party";
+  canvasControls.hidden = false;
+  primaryControl.hidden = mode === "party";
   if (mode === "confetti") {
     $("#canvasControlButton").textContent = "LMB";
     $("#canvasControlAction").textContent = "Explosie";
@@ -162,6 +170,8 @@ function setMode(mode) {
   } else if (mode === "polonaise") {
     $("#canvasControlButton").textContent = "RMB";
     $("#canvasControlAction").textContent = "Backstep";
+    secondaryControl.hidden = true;
+  } else {
     secondaryControl.hidden = true;
   }
   $("#varyColors").checked = state.varyColors;
@@ -243,6 +253,7 @@ function syncControlsFromState() {
   });
   $("#canvasWidth").value = state.width; $("#canvasHeight").value = state.height;
   $$("input[type='range']").forEach(updateRange);
+  renderTextMenus();
   updateColorControls(); setMode(state.mode); updateDimensions();
 }
 
@@ -252,6 +263,132 @@ function canvasPoint(event) {
     x: ((event.clientX - bounds.left) / bounds.width) * state.width,
     y: ((event.clientY - bounds.top) / bounds.height) * state.height,
   };
+}
+
+function activeTextItem() {
+  return state.textItems.find((item) => item.id === activeTextId) || null;
+}
+
+function closeTextMenu() {
+  activeTextId = null;
+  $$("#textMenus .text-block").forEach((block) => { block.open = false; });
+}
+
+function renderTextMenus(focusText = false) {
+  const section = $("#textSection");
+  const menus = $("#textMenus");
+  section.hidden = state.textItems.length === 0;
+  menus.replaceChildren();
+
+  for (const item of state.textItems) {
+    const block = document.createElement("details");
+    block.className = "text-block";
+    block.dataset.textId = item.id;
+    block.open = item.id === activeTextId;
+
+    const summary = document.createElement("summary");
+    const title = document.createElement("span");
+    title.className = "text-block-title";
+    title.textContent = item.text.trim().split("\n")[0] || "Lege tekst";
+    summary.append(title);
+
+    const body = document.createElement("div");
+    body.className = "text-block-body";
+    body.innerHTML = `<label class="field field-text"><span>Tekst</span><textarea class="text-value" rows="2" maxlength="160" spellcheck="false"></textarea></label>
+      <div class="text-block-row">
+        <label class="field"><span><span>Grootte</span><output class="text-size-output"></output></span><input class="text-size" type="range" min="2" max="50" step="0.5" /></label>
+        <label class="field"><span>Blendmodus</span><select class="text-blend-mode"><option value="difference">Difference</option><option value="normal">Normaal</option></select></label>
+      </div>
+      <div class="field"><span>Positie</span><div class="text-position-grid" role="group" aria-label="Tekstpositie"></div></div>
+      <button class="text-delete" type="button">Verwijder tekst</button>`;
+
+    const textValue = body.querySelector(".text-value");
+    const textSize = body.querySelector(".text-size");
+    const textSizeOutput = body.querySelector(".text-size-output");
+    const blendMode = body.querySelector(".text-blend-mode");
+    const positionGrid = body.querySelector(".text-position-grid");
+    textValue.value = item.text;
+    textSize.value = item.size;
+    textSizeOutput.value = `${item.size}%`;
+    blendMode.value = item.blendMode;
+    updateRange(textSize);
+
+    const occupied = new Set(state.textItems.filter((candidate) => candidate.id !== item.id).map((candidate) => candidate.position));
+    for (const position of TEXT_POSITIONS) {
+      const button = document.createElement("button");
+      const active = position.id === item.position;
+      button.type = "button";
+      button.dataset.position = position.id;
+      button.dataset.horizontal = position.horizontal;
+      button.dataset.vertical = position.vertical;
+      button.title = position.label;
+      button.setAttribute("aria-label", position.label);
+      button.classList.toggle("is-active", active);
+      button.disabled = !active && occupied.has(position.id);
+      button.addEventListener("click", () => {
+        item.position = position.id;
+        activeTextId = item.id;
+        renderTextMenus();
+      });
+      positionGrid.append(button);
+    }
+
+    block.addEventListener("toggle", () => {
+      if (!block.open) {
+        if (activeTextId === item.id) activeTextId = null;
+        return;
+      }
+      activeTextId = item.id;
+      $$("#textMenus .text-block").forEach((other) => { if (other !== block) other.open = false; });
+    });
+    textValue.addEventListener("input", (event) => {
+      item.text = event.target.value;
+      title.textContent = item.text.trim().split("\n")[0] || "Lege tekst";
+    });
+    textSize.addEventListener("input", (event) => {
+      item.size = Number(event.target.value);
+      textSizeOutput.value = `${item.size}%`;
+      updateRange(event.target);
+    });
+    blendMode.addEventListener("change", (event) => { item.blendMode = event.target.value; });
+    body.querySelector(".text-delete").addEventListener("click", () => {
+      state.textItems = state.textItems.filter((candidate) => candidate.id !== item.id);
+      if (activeTextId === item.id) activeTextId = null;
+      renderTextMenus();
+      toast("Tekst verwijderd");
+    });
+
+    block.append(summary, body);
+    menus.append(block);
+  }
+
+  const activeBlock = menus.querySelector(`[data-text-id="${activeTextId}"]`);
+  if (activeBlock) {
+    activeBlock.scrollIntoView({ block: "nearest" });
+    if (focusText) {
+      const input = activeBlock.querySelector(".text-value");
+      input.focus();
+      input.select();
+    }
+  }
+}
+
+function openTextMenu(id, recordHistory = true, focusText = false) {
+  activeTextId = id;
+  if (!activeTextItem()) return;
+  if (recordHistory) pushHistory();
+  renderTextMenus(focusText);
+}
+
+function addText() {
+  const occupied = new Set(state.textItems.map((item) => item.position));
+  const position = TEXT_POSITIONS.find((candidate) => !occupied.has(candidate.id));
+  if (!position) return toast("Alle 9 tekstposities zijn bezet");
+  pushHistory();
+  const item = { id: nextTextId, text: "tekst", position: position.id, size: 6, blendMode: "difference" };
+  nextTextId += 1;
+  state.textItems.push(item);
+  openTextMenu(item.id, false, true);
 }
 
 function bindControls() {
@@ -316,11 +453,20 @@ function bindControls() {
   }, true);
   window.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); undo(); }
+    const editable = event.target.closest?.("input, textarea, select, [contenteditable='true']");
+    if (!editable && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLocaleLowerCase() === "t") { event.preventDefault(); addText(); }
+    if (event.key === "Escape" && activeTextId !== null) closeTextMenu();
   });
-
-  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  canvas.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    const point = canvasPoint(event);
+    const textId = scene.hitTestText(point.x, point.y);
+    if (textId !== null) openTextMenu(textId);
+    else closeTextMenu();
+  });
   canvas.addEventListener("pointerdown", (event) => {
     const point = canvasPoint(event);
+    if (event.button === 2 && scene.hitTestText(point.x, point.y) !== null) return;
     if (state.mode === "polonaise") {
       if (event.button === 2) {
         scene.queuePolonaiseSidestep();

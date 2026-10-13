@@ -7,7 +7,7 @@
     <meta name="description" content="Noordzuid animatietool voor merkbeelden en animaties." />
     <title>Noordzuid animatietool</title>
     <link rel="icon" href="assets/NZ1.ico" sizes="32x32" />
-    <link rel="stylesheet" href="style.css?v=20261008-1" />
+    <link rel="stylesheet" href="style.css?v=20261013-2" />
   </head>
   <body>
     <main class="app-shell">
@@ -65,6 +65,11 @@
             </div>
           </section>
 
+          <section class="control-section text-section" id="textSection" aria-label="Tekst bewerken" hidden>
+            <div class="section-heading"><h2>Tekst</h2></div>
+            <div class="text-menus" id="textMenus"></div>
+          </section>
+
           <section class="control-section export-section">
             <div class="section-heading"><h2>Export</h2></div>
             <div class="size-row">
@@ -87,12 +92,13 @@
           <div class="canvas-controls" id="canvasControls" aria-live="polite">
             <span class="canvas-control" id="canvasControlPrimary"><kbd id="canvasControlButton">LMB</kbd><span id="canvasControlAction">Explosie</span></span>
             <span class="canvas-control" id="canvasControlSecondary"><kbd>RMB</kbd><span>Extra confetti</span></span>
+            <span class="canvas-control"><kbd>T</kbd><span>Tekst toevoegen</span></span>
           </div>
           <div class="canvas-frame" id="canvasFrame"><canvas id="artboard" width="1080" height="1920" aria-label="Voorvertoning"></canvas></div>
         </div>
       </section>
     </main>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=20261013-2"></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { LOGOS, PALETTE, STROKES } from "./constants.js";
+import { LOGOS, PALETTE, STROKES, TEXT_POSITIONS } from "./constants.js";
 
 const TAU = Math.PI * 2;
 const PARTY_PULSE_INTERVAL = 0.72;
@@ -72,6 +72,7 @@ export class Scene {
     this.lastTime = performance.now();
     this.running = false;
     this.pointer = { down: false, x: 0, y: 0 };
+    this.textHitAreas = [];
   }
 
   async init() {
@@ -355,6 +356,54 @@ export class Scene {
     if (this.state.mode === "confetti") this.renderConfetti(dt);
     if (this.state.mode === "polonaise") this.renderPolonaise(dt);
     if (this.state.mode === "party") this.renderParty(dt);
+    this.renderText();
+  }
+
+  renderText() {
+    const marginX = this.state.width * 0.045;
+    const marginY = this.state.height * 0.04;
+    this.textHitAreas = [];
+    for (const item of this.state.textItems) {
+      const position = TEXT_POSITIONS.find((candidate) => candidate.id === item.position) || TEXT_POSITIONS[4];
+      const fontSize = Math.min(this.state.width, this.state.height) * item.size / 100;
+      const lineHeight = fontSize * 1.08;
+      const lines = String(item.text).split("\n");
+      const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
+      const x = position.horizontal === "left" ? marginX : position.horizontal === "right" ? this.state.width - marginX : this.state.width * 0.5;
+      const anchorY = position.vertical === "top" ? marginY : position.vertical === "bottom" ? this.state.height - marginY : this.state.height * 0.5;
+      const top = position.vertical === "top" ? anchorY : position.vertical === "bottom" ? anchorY - blockHeight : anchorY - blockHeight * 0.5;
+
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = item.blendMode === "difference" ? "difference" : "source-over";
+      this.ctx.fillStyle = item.blendMode === "difference" ? "#ffffff" : this.state.foreground;
+      this.ctx.font = `600 ${fontSize}px Saans`;
+      this.ctx.textAlign = position.horizontal;
+      this.ctx.textBaseline = "top";
+      let maxWidth = 0;
+      lines.forEach((line, index) => {
+        maxWidth = Math.max(maxWidth, this.ctx.measureText(line || " ").width);
+        this.ctx.fillText(line, x, top + index * lineHeight);
+      });
+      this.ctx.restore();
+
+      const left = position.horizontal === "left" ? x : position.horizontal === "right" ? x - maxWidth : x - maxWidth * 0.5;
+      const hitPadding = Math.max(8, fontSize * 0.2);
+      this.textHitAreas.push({
+        id: item.id,
+        left: left - hitPadding,
+        right: left + maxWidth + hitPadding,
+        top: top - hitPadding,
+        bottom: top + blockHeight + hitPadding,
+      });
+    }
+  }
+
+  hitTestText(x, y) {
+    for (let index = this.textHitAreas.length - 1; index >= 0; index -= 1) {
+      const area = this.textHitAreas[index];
+      if (x >= area.left && x <= area.right && y >= area.top && y <= area.bottom) return area.id;
+    }
+    return null;
   }
 
   updateConfetti(dt) {
